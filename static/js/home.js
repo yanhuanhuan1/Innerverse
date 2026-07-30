@@ -19,6 +19,99 @@ let projectMenuProjectId = null;
 let pendingDeleteProjectId = null;
 let homeFocus = 'hero';
 let homeWheelGate = 0;
+const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
+const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
+
+function readLocalArray(key){
+    try {
+        const value = JSON.parse(localStorage.getItem(key) || '[]');
+        return Array.isArray(value) ? value.filter(item => item && item.id) : [];
+    } catch(e) {
+        return [];
+    }
+}
+
+function writeLocalArray(key, list){
+    try { localStorage.setItem(key, JSON.stringify(list || [])); } catch(e) {}
+}
+
+function mergeById(primary=[], fallback=[]){
+    const map = new Map();
+    [...fallback, ...primary].forEach(item => {
+        if(item?.id) map.set(item.id, {...map.get(item.id), ...item});
+    });
+    return [...map.values()];
+}
+
+function localId(prefix){
+    const random = crypto?.randomUUID?.() || `${Date.now()}${Math.random().toString(16).slice(2)}`;
+    return `${prefix}_${String(random).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+}
+
+function persistLocalProject(project){
+    if(!project?.id || project.id === 'default') return project;
+    const list = readLocalArray(LOCAL_PROJECTS_KEY);
+    const index = list.findIndex(item => item.id === project.id);
+    const next = {...project, local:true};
+    if(index >= 0) list[index] = {...list[index], ...next};
+    else list.push(next);
+    writeLocalArray(LOCAL_PROJECTS_KEY, list);
+    return next;
+}
+
+function persistLocalCanvas(canvas){
+    if(!canvas?.id) return canvas;
+    const list = readLocalArray(LOCAL_CANVASES_KEY);
+    const index = list.findIndex(item => item.id === canvas.id);
+    const now = Date.now();
+    const next = {
+        id: canvas.id,
+        title: canvas.title || L('新画布','New canvas'),
+        icon: canvas.icon || 'layers',
+        kind: canvas.kind || 'classic',
+        project: canvas.project || 'default',
+        created_at: canvas.created_at || now,
+        updated_at: canvas.updated_at || now,
+        node_count: Number(canvas.node_count || canvas.nodes?.length || 0),
+        local:true,
+        nodes: canvas.nodes || [],
+        connections: canvas.connections || [],
+        viewport: canvas.viewport || {x:0, y:0, scale:1},
+        logs: canvas.logs || []
+    };
+    if(index >= 0) list[index] = {...list[index], ...next};
+    else list.push(next);
+    writeLocalArray(LOCAL_CANVASES_KEY, list);
+    return next;
+}
+
+function createLocalProject(name){
+    const now = Date.now();
+    return persistLocalProject({
+        id: localId('project'),
+        name: (name || L('新创作项目','New creative project')).slice(0, 60),
+        order: now,
+        created_at: now,
+        updated_at: now,
+        canvas_count: 0
+    });
+}
+
+function createLocalCanvas({title, projectId, mode}={}){
+    const now = Date.now();
+    return persistLocalCanvas({
+        id: localId('canvas'),
+        title: title || L('新画布','New canvas'),
+        icon: mode === 'text' ? 'sparkles' : 'layers',
+        kind: 'classic',
+        project: projectId || 'default',
+        created_at: now,
+        updated_at: now,
+        nodes: [],
+        connections: [],
+        viewport: {x:0, y:0, scale:1}
+    });
+}
 
 function showStatus(text){
     if(!statusEl) return;
@@ -201,21 +294,27 @@ function openCanvas(canvas){
 }
 
 async function createCanvasInProject({title, projectId, prompt='', mode=currentMode}={}){
-    const res = await fetch('/api/canvases', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-            title: title || L('新画布','New canvas'),
-            icon: mode === 'text' ? 'sparkles' : 'layers',
-            kind:'classic',
-            project: projectId || 'default',
-            board_x:0,
-            board_y:0
-        })
-    });
-    if(!res.ok) throw new Error('create canvas failed');
-    const data = await res.json();
-    return data.canvas;
+    const payload = {
+        title: title || L('新画布','New canvas'),
+        icon: mode === 'text' ? 'sparkles' : 'layers',
+        kind:'classic',
+        project: projectId || 'default',
+        board_x:0,
+        board_y:0
+    };
+    try {
+        const res = await fetch('/api/canvases', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload)
+        });
+        if(!res.ok) throw new Error('create canvas failed');
+        const data = await res.json();
+        return persistLocalCanvas(data.canvas || payload);
+    } catch(err) {
+        console.warn('using local canvas fallback', err);
+        return createLocalCanvas({title: payload.title, projectId: payload.project, mode});
+    }
 }
 
 async function startCreativeProject(prompt='', mode=currentMode){
@@ -228,14 +327,20 @@ async function startCreativeProject(prompt='', mode=currentMode){
     try {
         const nameSeed = (prompt || '').trim().slice(0, 24);
         const projectName = nameSeed || L('新创作项目','New creative project');
-        const projectRes = await fetch('/api/projects', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({name: projectName})
-        });
-        if(!projectRes.ok) throw new Error('create project failed');
-        const projectData = await projectRes.json();
-        const project = projectData.project || {};
+        let project;
+        try {
+            const projectRes = await fetch('/api/projects', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({name: projectName})
+            });
+            if(!projectRes.ok) throw new Error('create project failed');
+            const projectData = await projectRes.json();
+            project = persistLocalProject(projectData.project || {});
+        } catch(projectErr) {
+            console.warn('using local project fallback', projectErr);
+            project = createLocalProject(projectName);
+        }
         const canvas = await createCanvasInProject({
             title: nameSeed || L('新画布','New canvas'),
             projectId: project.id || 'default',
@@ -346,8 +451,8 @@ async function renameProject(projectId, name){
         await loadHomeData();
     } catch(err){
         console.error(err);
-        if(project && prevName) project.name = prevName;
-        showStatus(L('重命名失败','Rename failed'));
+        if(project) persistLocalProject({...project, name, updated_at:Date.now()});
+        showStatus(L('项目已重命名','Project renamed'));
         loadHomeData();
     }
 }
@@ -372,8 +477,12 @@ async function deleteProject(projectId){
         showStatus(L('项目已删除','Project deleted'));
     } catch(err){
         console.error(err);
-        showStatus(L('删除项目失败','Delete project failed'));
-        loadHomeData();
+        writeLocalArray(LOCAL_PROJECTS_KEY, readLocalArray(LOCAL_PROJECTS_KEY).filter(item => item.id !== projectId));
+        writeLocalArray(LOCAL_CANVASES_KEY, readLocalArray(LOCAL_CANVASES_KEY).map(item => (item.project || 'default') === projectId ? {...item, project:'default'} : item));
+        projects = projects.filter(p => p.id !== projectId);
+        canvases = canvases.map(item => (item.project || 'default') === projectId ? {...item, project:'default'} : item);
+        renderRecent();
+        showStatus(L('项目已删除','Project deleted'));
     }
 }
 
@@ -480,12 +589,17 @@ function renderRecent(){
 async function loadHomeData(){
     try {
         const [projectRes, canvasRes] = await Promise.all([fetch('/api/projects'), fetch('/api/canvases')]);
-        projects = projectRes.ok ? (await projectRes.json()).projects || [] : [];
-        canvases = canvasRes.ok ? (await canvasRes.json()).canvases || [] : [];
+        const remoteProjects = projectRes.ok ? (await projectRes.json()).projects || [] : [];
+        const remoteCanvases = canvasRes.ok ? (await canvasRes.json()).canvases || [] : [];
+        projects = mergeById(remoteProjects, readLocalArray(LOCAL_PROJECTS_KEY)).filter(p => p.id !== 'default');
+        canvases = mergeById(remoteCanvases, readLocalArray(LOCAL_CANVASES_KEY));
         renderRecent();
     } catch(err){
         console.error(err);
-        showStatus(L('最近项目加载失败','Failed to load recent projects'));
+        projects = readLocalArray(LOCAL_PROJECTS_KEY).filter(p => p.id !== 'default');
+        canvases = readLocalArray(LOCAL_CANVASES_KEY);
+        renderRecent();
+        showStatus(L('已使用本地项目数据','Using local project data'));
     }
 }
 

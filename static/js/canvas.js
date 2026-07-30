@@ -392,7 +392,113 @@ let emojiPickerCanvasId = null;
 let canvasMetaAnchorId = '';
 let canvasSortMode = (() => { try { return localStorage.getItem('canvasSortMode') || 'recent'; } catch(e){ return 'recent'; } })();
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
+const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
+const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
 const CANVAS_COLOR_OPTIONS = ['red','orange','amber','green','teal','blue','violet','pink','slate'];
+
+function readLocalArray(key){
+    try {
+        const value = JSON.parse(localStorage.getItem(key) || '[]');
+        return Array.isArray(value) ? value.filter(item => item && item.id) : [];
+    } catch(e) {
+        return [];
+    }
+}
+
+function writeLocalArray(key, list){
+    try { localStorage.setItem(key, JSON.stringify(list || [])); } catch(e) {}
+}
+
+function mergeById(primary=[], fallback=[]){
+    const map = new Map();
+    [...fallback, ...primary].forEach(item => {
+        if(item?.id) map.set(item.id, {...map.get(item.id), ...item});
+    });
+    return [...map.values()];
+}
+
+function localId(prefix){
+    const random = crypto?.randomUUID?.() || `${Date.now()}${Math.random().toString(16).slice(2)}`;
+    return `${prefix}_${String(random).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+}
+
+function localCanvasRecord(data){
+    if(!data?.id) return null;
+    return {
+        id: data.id,
+        title: data.title || tr('canvas.untitled'),
+        icon: data.icon || 'layers',
+        kind: data.kind || 'classic',
+        owner: data.owner || '',
+        color: data.color || '',
+        pinned: Boolean(data.pinned),
+        project: data.project || requestedCanvasListProject() || rememberedCanvasListProject() || 'default',
+        created_at: Number(data.created_at || Date.now()),
+        updated_at: Number(data.updated_at || Date.now()),
+        deleted_at: Number(data.deleted_at || 0),
+        node_count: Number(data.node_count || data.nodes?.length || 0),
+        local: true
+    };
+}
+
+function persistLocalCanvas(data){
+    if(!data?.id) return data;
+    const list = readLocalArray(LOCAL_CANVASES_KEY);
+    const index = list.findIndex(item => item.id === data.id);
+    const now = Date.now();
+    const next = {
+        ...data,
+        title: data.title || tr('canvas.untitled'),
+        icon: data.icon || 'layers',
+        kind: data.kind || 'classic',
+        project: data.project || requestedCanvasListProject() || rememberedCanvasListProject() || 'default',
+        created_at: Number(data.created_at || now),
+        updated_at: Number(data.updated_at || now),
+        nodes: data.nodes || [],
+        connections: data.connections || [],
+        viewport: data.viewport || {x:0, y:0, scale:1},
+        logs: data.logs || [],
+        local:true
+    };
+    if(index >= 0) list[index] = {...list[index], ...next};
+    else list.push(next);
+    writeLocalArray(LOCAL_CANVASES_KEY, list);
+    return next;
+}
+
+function loadLocalCanvas(id){
+    return readLocalArray(LOCAL_CANVASES_KEY).find(item => item.id === id && !item.deleted_at) || null;
+}
+
+function createLocalCanvasData({title, kind='classic', project}={}){
+    const now = Date.now();
+    return persistLocalCanvas({
+        id: localId('canvas'),
+        title: title || tr('canvas.newCanvas'),
+        icon: kind === 'smart' ? 'sparkles' : 'layers',
+        kind,
+        project: project || requestedCanvasListProject() || rememberedCanvasListProject() || 'default',
+        created_at: now,
+        updated_at: now,
+        nodes: [],
+        connections: [],
+        viewport: {x:0, y:0, scale:1},
+        logs: []
+    });
+}
+
+function persistCurrentCanvasLocal(){
+    if(!canvas?.id) return;
+    const localViewport = viewport || canvas.viewport || {x:0, y:0, scale:1};
+    persistLocalCanvas({
+        ...canvas,
+        nodes: serializableCanvasNodes(),
+        connections,
+        viewport: localViewport,
+        logs: canvas.logs || [],
+        updated_at: Date.now()
+    });
+}
 // 先绑定返回，避免编辑器后续初始化较慢时丢失来源项目。
 backToManagerBtn?.addEventListener('click', () => {
     window.location.href = canvasListUrlForProject(canvas?.project || requestedCanvasListProject() || rememberedCanvasListProject());
@@ -1576,20 +1682,22 @@ async function saveCanvas(){
     sanitizeConnections();
     savingCanvasNow = true;
     saveCanvasAgain = false;
+    const payload = {
+        title:canvas.title,
+        icon:canvas.icon || 'layers',
+        nodes:serializableCanvasNodes(),
+        connections,
+        viewport,
+        logs:canvas.logs || [],
+        client_id:CLIENT_ID,
+        base_updated_at:Number(lastCanvasUpdatedAt || canvas.updated_at || 0)
+    };
+    persistLocalCanvas({...canvas, ...payload, updated_at:Date.now()});
     try {
         const res = await fetch(`/api/canvases/${canvas.id}`, {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                title:canvas.title,
-                icon:canvas.icon || '🧩',
-                nodes:serializableCanvasNodes(),
-                connections,
-                viewport,
-                logs:canvas.logs || [],
-                client_id:CLIENT_ID,
-                base_updated_at:Number(lastCanvasUpdatedAt || canvas.updated_at || 0)
-            })
+            body:JSON.stringify(payload)
         });
         if(res.status === 409){
             const data = await res.json().catch(() => ({}));
@@ -1611,13 +1719,18 @@ async function saveCanvas(){
         viewport = localViewport;
         canvas.updated_at = Number(canvas.updated_at || Date.now());
         lastCanvasUpdatedAt = canvas.updated_at;
+        persistLocalCanvas({...canvas, nodes:serializableCanvasNodes(), connections, viewport, logs:canvas.logs || []});
         localCanvasDirty = Boolean(saveCanvasAgain);
         if(currentCanvasTime) currentCanvasTime.textContent = formatCanvasTime(canvas.updated_at);
         setStatus('Saved');
         loadCanvasList(false);
     } catch(e) {
-        setStatus('Save failed');
-        console.error(e);
+        canvas.updated_at = Date.now();
+        lastCanvasUpdatedAt = canvas.updated_at;
+        localCanvasDirty = Boolean(saveCanvasAgain);
+        if(currentCanvasTime) currentCanvasTime.textContent = formatCanvasTime(canvas.updated_at);
+        setStatus('Saved locally');
+        console.warn('remote save failed; kept local canvas', e);
     } finally {
         savingCanvasNow = false;
         if(saveCanvasAgain && canvas && !applyingRemoteCanvas){
@@ -1677,7 +1790,7 @@ async function loadCanvasList(openFirst=true){
         const res = await fetch('/api/canvases');
         if(!res.ok) throw new Error(tr('canvas.canvasListFailed'));
         const data = await res.json();
-        canvases = data.canvases || [];
+        canvases = mergeById(data.canvases || [], readLocalArray(LOCAL_CANVASES_KEY).map(localCanvasRecord).filter(Boolean));
         sortCanvasListByUpdated();
         refreshGateViewControls();
         renderCanvasList();
@@ -1688,7 +1801,10 @@ async function loadCanvasList(openFirst=true){
             setStatus(trashMode ? (deletedCanvases.length ? tr('canvas.trash') : tr('canvas.trashEmpty')) : (canvases.length ? tr('canvas.chooseFirst') : tr('canvas.noCanvasCreateFirst')));
         }
     } catch(e) {
-        setStatus(tr('canvas.canvasListFailed'));
+        canvases = readLocalArray(LOCAL_CANVASES_KEY).map(localCanvasRecord).filter(Boolean);
+        sortCanvasListByUpdated();
+        renderCanvasList();
+        setStatus(canvases.length ? 'Using local canvases' : tr('canvas.canvasListFailed'));
         console.error(e);
     }
 }
@@ -2025,6 +2141,7 @@ async function createCanvas(){
         });
         if(!res.ok) throw new Error(tr('canvas.createFailed'));
         const data = await res.json();
+        persistLocalCanvas(data.canvas);
         if(isSmart){
             setCreateMode(false);
             await loadCanvasList(false);
@@ -2048,8 +2165,29 @@ async function createCanvas(){
         await loadCanvasList(false);
         renderCanvasList();
     } catch(e) {
-        setStatus(tr('canvas.createFailed'));
-        console.error(e);
+        console.warn('remote canvas create failed; using local canvas', e);
+        const local = createLocalCanvasData({title, kind:isSmart ? 'smart' : 'classic'});
+        if(isSmart){
+            setCreateMode(false);
+            openSmartCanvasPage(local.id);
+            return;
+        }
+        resetCascadeRuntimeState();
+        canvas = local;
+        canvas.logs = canvas.logs || [];
+        nodes = canvas.nodes || [];
+        connections = canvas.connections || [];
+        viewport = localViewportForCanvas(canvas.id, canvas.viewport || {x:0, y:0, scale:1});
+        canvas.viewport = {...viewport};
+        resetTransientRunState(nodes);
+        sanitizeConnections();
+        selected.clear();
+        setCanvasMode(true);
+        render();
+        setStatus('Saved locally');
+        setCreateMode(false);
+        await loadCanvasList(false);
+        renderCanvasList();
     }
 }
 async function createSmartCanvas(){
@@ -2168,9 +2306,18 @@ async function setCanvasTitle(id, title){
 async function openCanvas(id){
     setStatus('Opening...');
     try {
-        const res = await fetch(`/api/canvases/${id}`);
-        if(!res.ok) throw new Error(tr('canvas.openFailed'));
-        const data = await res.json();
+        let data = null;
+        try {
+            const res = await fetch(`/api/canvases/${id}`);
+            if(!res.ok) throw new Error(tr('canvas.openFailed'));
+            data = await res.json();
+            if(data.canvas) persistLocalCanvas(data.canvas);
+        } catch(remoteErr) {
+            const local = loadLocalCanvas(id);
+            if(!local) throw remoteErr;
+            data = {canvas: local};
+            setStatus('Using local canvas');
+        }
         resetCascadeRuntimeState();
         canvas = data.canvas;
         rememberCanvasListProject(canvas.project || 'default');
