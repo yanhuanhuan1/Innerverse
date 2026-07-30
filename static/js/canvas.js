@@ -2630,7 +2630,10 @@ document.addEventListener('mousedown', e => {
 }, true);
 gateCanvasList?.addEventListener('scroll', () => requestAnimationFrame(positionCanvasMetaPopover), {passive:true});
 window.addEventListener('resize', () => requestAnimationFrame(positionCanvasMetaPopover));
-window.addEventListener('studio-theme-change', event => applyTheme(localStorage.getItem(CANVAS_THEME_KEY) || event.detail?.theme || 'dark'));
+window.addEventListener('studio-theme-change', () => {
+    try { localStorage.setItem(CANVAS_THEME_KEY, 'dark'); } catch(e) {}
+    applyTheme('dark');
+});
 function cropDragModeFromPointer(event){
     const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;
     if(explicit) return `crop-${explicit}`;
@@ -2758,7 +2761,7 @@ function requestedCanvasListProject(){
 
 function canvasListUrlForProject(projectId){
     const pid = rememberCanvasListProject(projectId);
-    return `/static/canvas-list.html?project=${encodeURIComponent(pid)}`;
+    return `/static/home.html?from_canvas=1&project=${encodeURIComponent(pid)}`;
 }
 
 function addNode(node){
@@ -16119,11 +16122,9 @@ function escapeHtml(str){ return String(str == null ? '' : str).replace(/[&<>"']
 function escapeAttr(str){ return escapeHtml(str); }
 
 window.onload = async () => {
-    if(!localStorage.getItem(CANVAS_DARK_DEFAULT_MIGRATED_KEY)){
-        localStorage.setItem(CANVAS_THEME_KEY, 'dark');
-        localStorage.setItem(CANVAS_DARK_DEFAULT_MIGRATED_KEY, '1');
-    }
-    applyTheme(localStorage.getItem(CANVAS_THEME_KEY) || localStorage.getItem('studio_theme') || 'dark');
+    localStorage.setItem(CANVAS_THEME_KEY, 'dark');
+    localStorage.setItem(CANVAS_DARK_DEFAULT_MIGRATED_KEY, '1');
+    applyTheme('dark');
     applyQuickToolbarState();
     if(window.StudioI18n) StudioI18n.apply();
     document.title = tr('canvas.title');

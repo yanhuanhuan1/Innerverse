@@ -8,11 +8,9 @@
     <script>
         (function(){
             try {
-                if(!localStorage.getItem('canvas_dark_default_migrated_v1')) {
-                    localStorage.setItem('canvas_theme', 'dark');
-                    localStorage.setItem('canvas_dark_default_migrated_v1', '1');
-                }
-                var theme = localStorage.getItem('canvas_theme') || localStorage.getItem('studio_theme') || 'dark';
+                localStorage.setItem('canvas_theme', 'dark');
+                localStorage.setItem('canvas_dark_default_migrated_v1', '1');
+                var theme = 'dark';
                 if(theme === 'dark') {
                     document.documentElement.classList.add('studio-theme-dark');
                     document.documentElement.classList.add('theme-dark');

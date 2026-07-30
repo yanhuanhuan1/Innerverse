@@ -261,6 +261,10 @@ function handleHostMessage(event){
 }
 window.addEventListener('message', handleHostMessage);
 
+function initialHomeParams(){
+    try { return new URLSearchParams(window.location.search); } catch(e) { return new URLSearchParams(); }
+}
+
 function setMode(mode){
     currentMode = mode || 'text';
     if(currentMode === 'assets') openShellPage('asset-manager');
@@ -603,6 +607,16 @@ async function loadHomeData(){
     }
 }
 
+function renderLocalHomeData(){
+    const localProjects = readLocalArray(LOCAL_PROJECTS_KEY).filter(p => p.id !== 'default');
+    const localCanvases = readLocalArray(LOCAL_CANVASES_KEY);
+    if(!localProjects.length && !localCanvases.length) return false;
+    projects = mergeById(projects, localProjects).filter(p => p.id !== 'default');
+    canvases = mergeById(canvases, localCanvases);
+    renderRecent();
+    return true;
+}
+
 document.getElementById('projectQuickCreate')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
 window.addEventListener('wheel', onHomeWheel, {passive:false});
 promptForm.addEventListener('submit', e => {
@@ -614,6 +628,8 @@ document.getElementById('attachBtn')?.addEventListener('click', () => openShellP
 if(window.StudioI18n) StudioI18n.apply();
 applyHomeStaticCopy();
 setMode('text');
+renderLocalHomeData();
 loadHomeData();
+if(initialHomeParams().get('section') === 'projects') focusProjectsSection();
 syncHomeHeaderControls();
 refreshIcons();
