@@ -11615,7 +11615,7 @@ async function runGenerator(genId, opts={}){
         if(!out){
             let outputs = [];
             for(const task of taskInfos){
-                const result = await waitCanvasImageTaskResult(task.task_id, {cascadeTargetId});
+                const result = await waitCanvasImageTaskResult(task.task_id, {cascadeTargetId, upstreamTaskId:task.upstream_task_id || '', providerId:payload.provider_id});
                 outputs.push(...(result.images || []));
                 run.request = requestMetaFromResult(result);
             }
@@ -11637,6 +11637,8 @@ async function runGenerator(genId, opts={}){
                 canvasTaskType:'online-image',
                 providerId:payload.provider_id,
                 model:payload.model,
+                upstreamTaskId:task.upstream_task_id || '',
+                upstreamTaskIds:task.upstream_task_ids || [],
                 appendGenerated:Boolean(opts.cascade)
             }))
         ];
@@ -12152,8 +12154,8 @@ function cascadeStopMessage(reason=''){
 }
 function cascadeBackendRestartMessage(){
     return langIsEn()
-        ? 'Task state is temporarily unavailable. The request may still be running upstream; do not submit it again immediately.'
-        : '任务状态暂时不可用。上游可能仍在生成中，请不要立刻重复提交。';
+        ? 'The task is temporarily unavailable. Please wait and try again; do not submit the generation again.'
+        : '任务状态暂时不可用，请稍后重试；请勿重复提交生成请求。';
 }
 function canvasTaskRecoveringMessage(){
     return langIsEn() ? 'Recovering task state...' : '正在恢复任务状态…';
@@ -12514,9 +12516,17 @@ async function runComposerApiImageNode(node, context={}){
     if(quality) payload.quality = quality;
     try {
         const tasks = await Promise.all(pendingIds.map(() => createCanvasImageTask(payload, {cascadeTargetId})));
+        tasks.forEach((task, index) => {
+            const pending = pendingById(node, pendingIds[index]);
+            if(pending){
+                pending.upstreamTaskId = task.upstream_task_id || '';
+                pending.upstreamTaskIds = task.upstream_task_ids || [];
+                pending.providerId = payload.provider_id;
+            }
+        });
         const outputs = [];
         for(let i = 0; i < tasks.length; i++){
-            const result = await waitCanvasImageTaskResult(tasks[i].task_id, {cascadeTargetId});
+            const result = await waitCanvasImageTaskResult(tasks[i].task_id, {cascadeTargetId, upstreamTaskId:tasks[i].upstream_task_id || '', providerId:payload.provider_id});
             if(i === 0) run.request = requestMetaFromResult(result);
             outputs.push(...(result.images || []));
         }
@@ -13592,6 +13602,20 @@ async function createCanvasImageTask(payload, options={}){
     if(!res.ok) throw new Error(await responseErrorMessage(res, tr('canvas.generationFailed')));
     return res.json();
 }
+async function queryCanvasUpstreamTask(upstreamTaskId, providerId, options={}){
+    if(!upstreamTaskId) return null;
+    try {
+        const res = await cascadeFetch('/api/image-task-query', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({provider_id:providerId || 'apimart', task_id:upstreamTaskId})
+        }, options);
+        if(!res.ok) return null;
+        return await res.json();
+    } catch(_err){
+        return null;
+    }
+}
 async function createCanvasComfyTask(payload, options={}){
     const res = await cascadeFetch('/api/canvas-comfy-tasks', {
         method:'POST',
@@ -13717,6 +13741,22 @@ async function pollCanvasImageTask(taskId, options={}){
             if(cascadeTargetId) ensureCascadeActive(cascadeTargetId);
             const res = await cascadeFetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`, {}, {cascadeTargetId});
             if(!res.ok){
+                const found = findPendingTask(taskId);
+                const upstreamTaskId = found?.pending?.upstreamTaskId || '';
+                if(res.status === 404 && upstreamTaskId){
+                    const upstream = await queryCanvasUpstreamTask(upstreamTaskId, found.pending.providerId, {cascadeTargetId});
+                    if(upstream?.status === 'succeeded'){
+                        completeCanvasImageTask(taskId, upstream);
+                        return 'succeeded';
+                    }
+                    if(upstream?.status === 'failed'){
+                        failCanvasImageTask(taskId, upstream.error || tr('canvas.generationFailed'), upstream);
+                        return 'failed';
+                    }
+                    setStatus(canvasTaskRecoveringMessage());
+                    await sleep(1800);
+                    continue;
+                }
                 if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
                     setStatus(canvasTaskRecoveringMessage());
                     await sleep(2200);
@@ -13753,6 +13793,15 @@ async function waitCanvasImageTaskResult(taskId, options={}){
         if(cascadeTargetId) ensureCascadeActive(cascadeTargetId);
         const res = await cascadeFetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`, {}, {cascadeTargetId});
         if(!res.ok){
+            const upstreamTaskId = options.upstreamTaskId || '';
+            if(res.status === 404 && upstreamTaskId){
+                const upstream = await queryCanvasUpstreamTask(upstreamTaskId, options.providerId, {cascadeTargetId});
+                if(upstream?.status === 'succeeded') return upstream;
+                if(upstream?.status === 'failed') throw new Error(upstream.error || tr('canvas.generationFailed'));
+                setStatus(canvasTaskRecoveringMessage());
+                await sleep(1800);
+                continue;
+            }
             if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
                 setStatus(canvasTaskRecoveringMessage());
                 await sleep(2200);

@@ -7565,7 +7565,7 @@ async function runJimengUpscale(node, index){
         });
         if(!task.task_id) throw new Error(tr('smart.errRunFailed'));
         const live = liveSmartNode(newNode) || newNode;
-        live.pendingTasks = [{taskId:task.task_id, kind:'image', providerId, model:''}];
+        live.pendingTasks = [{taskId:task.task_id, upstreamTaskId:task.upstream_task_id || '', kind:'image', providerId, model:''}];
         live.pending = 1;
         live.running = false;
         render();
@@ -14396,7 +14396,13 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
                 delete history.h;
                 outputSlot.images = [];
             }
-            outputSlot.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:taskResult.providerId, model:taskResult.model}));
+            outputSlot.pendingTasks = taskIds.map((taskId, index) => ({
+                taskId,
+                upstreamTaskId:taskResult.upstreamTaskIds?.[index] || '',
+                kind:'image',
+                providerId:taskResult.providerId,
+                model:taskResult.model
+            }));
             outputSlot.pending = Math.max(taskIds.length, Number(outputSlot.pending || 0) || taskIds.length);
             outputSlot.running = false;
             render();
@@ -14848,7 +14854,13 @@ async function runGeneration(){
         if(isApiLikeEngine(settings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
-            pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
+            pendingNode.pendingTasks = taskIds.map((taskId, index) => ({
+                taskId,
+                upstreamTaskId:outImages.upstreamTaskIds?.[index] || '',
+                kind:'image',
+                providerId:outImages.providerId,
+                model:outImages.model
+            }));
             pendingNode.pending = Math.max(taskIds.length, Number(pendingNode.pending || 0) || taskIds.length);
             pendingNode.runStartedAt = nowMs();
             pendingNode.runTimerHidden = false;
@@ -14971,7 +14983,13 @@ async function runApiGeneration(prompt, refs, runSettings=settings){
         if(!r.ok) throw new Error(await r.text());
         return r.json();
     })));
-    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    return {
+        taskIds:tasks.map(task => task.task_id).filter(Boolean),
+        upstreamTaskIds:tasks.map(task => task.upstream_task_id || ''),
+        count,
+        providerId:payload.provider_id,
+        model:payload.model
+    };
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const ref = selectedRunningHubRef(runSettings);
@@ -15292,6 +15310,13 @@ function smartPendingTasks(node){
     if(!node || !Array.isArray(node.pendingTasks)) return [];
     return node.pendingTasks.filter(task => task && task.taskId);
 }
+function smartPendingTaskById(taskId){
+    for(const node of nodes || []){
+        const task = smartPendingTasks(node).find(item => item.taskId === taskId);
+        if(task) return {node, task};
+    }
+    return null;
+}
 class JimengPendingSignal extends Error {
     constructor(info){
         const data = info || {};
@@ -15520,12 +15545,24 @@ async function pollSmartCanvasTask(taskId){
         for(let i = 0; i < 900; i++){
             await new Promise(resolve => setTimeout(resolve, 2000));
             const task = await fetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`).then(async r => {
-                if(r.status === 404 && Date.now() - startedAt < 120000) return {status:'recovering'};
+                if(r.status === 404){
+                    const found = smartPendingTaskById(taskId);
+                    if(found?.task?.upstreamTaskId){
+                        try {
+                            const upstream = await fetchImageTaskQuery(providerIdForSmartTask(found.node, found.task), found.task.upstreamTaskId);
+                            if(upstream?.status === 'succeeded') return upstream;
+                            if(upstream?.status === 'failed') return upstream;
+                        } catch(_err){
+                            // Keep polling the durable local task when the recovery query is temporarily unavailable.
+                        }
+                    }
+                    if(Date.now() - startedAt < 120000) return {status:'recovering'};
+                }
                 if(!r.ok) throw new Error(await r.text());
                 return r.json();
             });
             if(task.status === 'recovering') continue;
-            if(task.status === 'succeeded') return task.result || {};
+            if(task.status === 'succeeded') return task.result || task || {};
             if(task.status === 'jimeng_pending') throw new JimengPendingSignal({submitId:task.submit_id, kind:task.kind, queueInfo:task.queue_info, message:task.message});
             if(task.status === 'failed'){
                 const recoverTaskId = task.upstream_task_id || extractUpstreamTaskId(task.error || '');

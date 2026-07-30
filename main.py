@@ -2569,6 +2569,7 @@ def _load_canvas_task_record(task_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 def _create_canvas_task_record(task: Dict[str, Any]) -> None:
+    task.setdefault("task_id", task.get("id", ""))
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task["id"]] = task
     _save_canvas_task_record(task)
@@ -2581,6 +2582,8 @@ def _get_canvas_task_record(task_id: str) -> Dict[str, Any]:
         if task:
             with CANVAS_TASK_LOCK:
                 CANVAS_TASKS[task_id] = task
+    if task:
+        task.setdefault("task_id", task.get("id", task_id))
     return dict(task or {})
 
 def _update_canvas_task_record(task_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -2589,6 +2592,7 @@ def _update_canvas_task_record(task_id: str, updates: Dict[str, Any]) -> Dict[st
     if not task:
         task = _load_canvas_task_record(task_id) or {"id": task_id}
     task.update(updates)
+    task.setdefault("task_id", task.get("id", task_id))
     task["updated_at"] = time.time()
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task_id] = task
@@ -11034,7 +11038,7 @@ async def generate_runninghub_video(payload, provider):
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
         return {"videos": local_urls, "task_id": task_id, "raw": result}
 
-async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution=""):
+async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", wait_for_async=True):
     provider = get_api_provider(provider_id)
     if provider["id"] == "modelscope":
         return await generate_modelscope_provider_image(prompt, size, model, reference_images, provider)
@@ -11282,6 +11286,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 except HTTPException:
                     task_id = extract_task_id(raw_preparsed)
                     if task_id:
+                        if not wait_for_async:
+                            return None, raw_preparsed
                         task_result = await wait_for_image_task(client, task_id, provider)
                         return extract_image(task_result), task_result
         try:
@@ -11323,6 +11329,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             if not task_id:
                 raise
         try:
+            if not wait_for_async:
+                return None, raw
             task_result = await wait_for_image_task(client, task_id, provider)
             return extract_image(task_result), task_result
         except HTTPException as exc:
@@ -13852,7 +13860,7 @@ async def fetch_upstream_models(provider_id: str):
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
-async def build_online_image_result(payload: OnlineImageRequest):
+async def build_online_image_result(payload: OnlineImageRequest, wait_for_async=True):
     provider = get_api_provider(payload.provider_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
@@ -13871,7 +13879,12 @@ async def build_online_image_result(payload: OnlineImageRequest):
         if operation == "upscale":
             image_data, raw_item = await generate_jimeng_upscale_image(image_refs, payload.resolution_type)
         else:
-            image_data, raw_item = await generate_ai_image(payload.prompt, request_size, payload.quality, model, image_refs, provider["id"], payload.aspect_ratio, payload.resolution)
+            image_data, raw_item = await generate_ai_image(payload.prompt, request_size, payload.quality, model, image_refs, provider["id"], payload.aspect_ratio, payload.resolution, wait_for_async=wait_for_async)
+        if image_data is None:
+            upstream_task_id = extract_task_id(raw_item) if isinstance(raw_item, dict) else None
+            if upstream_task_id:
+                return [], [], raw_item, upstream_task_id
+            raise HTTPException(status_code=502, detail="上游生成接口没有返回图片或任务 ID")
         try:
             image_items = extract_images(raw_item) if isinstance(raw_item, dict) else [image_data]
         except HTTPException:
@@ -13883,7 +13896,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
             if local_url:
                 local_urls.append(local_url)
                 local_items.append(image_output_meta(local_url, item))
-        return local_urls, local_items, raw_item
+        return local_urls, local_items, raw_item, ""
     try:
         generated = await asyncio.gather(*(generate_one() for _ in range(count)))
     except httpx.HTTPStatusError as exc:
@@ -13896,9 +13909,28 @@ async def build_online_image_result(payload: OnlineImageRequest):
         log_net_error(f"生图 网络/TLS错误 provider={provider.get('id')} model={model}", exc)
         raise HTTPException(status_code=502, detail=f"请求上游生图接口失败：{exc}") from exc
 
-    local_urls = [url for urls, _items, _raw in generated for url in (urls or []) if url]
-    local_items = [item for _urls, items, _raw in generated for item in (items or []) if item.get("url")]
+    local_urls = [url for urls, _items, _raw, _task_id in generated for url in (urls or []) if url]
+    local_items = [item for _urls, items, _raw, _task_id in generated for item in (items or []) if item.get("url")]
+    upstream_task_ids = [task_id for _urls, _items, _raw, task_id in generated if task_id]
     raw = generated[0][2] if generated else {}
+    if upstream_task_ids:
+        return {
+            "status": "upstream_pending",
+            "prompt": payload.prompt,
+            "images": local_urls,
+            "image_items": local_items,
+            "timestamp": time.time(),
+            "type": "online",
+            "model": model,
+            "provider_id": provider["id"],
+            "provider_name": provider.get("name") or provider["id"],
+            "task_id": upstream_task_ids[0],
+            "upstream_task_id": upstream_task_ids[0],
+            "upstream_task_ids": upstream_task_ids,
+            "request_id": raw.get("id") if isinstance(raw, dict) else None,
+            "params": {"provider_id": provider["id"], "model": model, "size": request_size, "requested_size": payload.size, "aspect_ratio": payload.aspect_ratio, "resolution": payload.resolution, "quality": payload.quality, "n": count, "reference_images": refs},
+            "raw": raw,
+        }
     if not local_urls:
         provider_name = provider.get("name") or provider["id"]
         raw_text = json.dumps(raw, ensure_ascii=False)[:800] if isinstance(raw, (dict, list)) else str(raw)[:800]
@@ -14057,7 +14089,16 @@ async def query_image_task(payload: ImageTaskQueryRequest):
 async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
     _update_canvas_task_record(task_id, {"status": "running", "started_at": time.time()})
     try:
-        result = await build_online_image_result(payload)
+        result = await build_online_image_result(payload, wait_for_async=False)
+        if result.get("status") == "upstream_pending":
+            _update_canvas_task_record(task_id, {
+                "status": "upstream_pending",
+                "upstream_task_id": result.get("upstream_task_id") or "",
+                "upstream_task_ids": result.get("upstream_task_ids") or [],
+                "result": None,
+                "error": "",
+            })
+            return
         _update_canvas_task_record(task_id, {
             "status": "succeeded",
             "result": result,
@@ -14101,14 +14142,78 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
         "model": payload.model,
         "payload": _model_payload_dict(payload),
     })
+    try:
+        provider = get_api_provider(payload.provider_id)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        status_code = getattr(exc, "status_code", 500)
+        return _update_canvas_task_record(task_id, {
+            "status": "failed",
+            "error": str(detail),
+            "status_code": status_code,
+        })
+    durable_upstream = is_apimart_provider(provider) or effective_image_request_mode(provider, payload.model) == "openai-async-image"
+    if durable_upstream:
+        try:
+            result = await build_online_image_result(payload, wait_for_async=False)
+            if result.get("status") == "upstream_pending":
+                return _update_canvas_task_record(task_id, {
+                    "status": "upstream_pending",
+                    "upstream_task_id": result.get("upstream_task_id") or "",
+                    "upstream_task_ids": result.get("upstream_task_ids") or [],
+                    "result": None,
+                    "error": "",
+                })
+            return _update_canvas_task_record(task_id, {
+                "status": "succeeded",
+                "result": result,
+                "error": "",
+            })
+        except Exception as exc:
+            detail = getattr(exc, "detail", None) or str(exc)
+            status_code = getattr(exc, "status_code", 500)
+            return _update_canvas_task_record(task_id, {
+                "status": "failed",
+                "error": str(detail),
+                "status_code": status_code,
+                "upstream_task_id": getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail),
+            })
     asyncio.create_task(run_canvas_image_task(task_id, payload))
-    return {"task_id": task_id, "status": "queued"}
+    return _get_canvas_task_record(task_id)
 
 @app.get("/api/canvas-image-tasks/{task_id}")
 async def get_canvas_image_task(task_id: str):
     task = _get_canvas_task_record(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Canvas task was not found. It may be expired or unavailable on this runtime.")
+    if task.get("status") in {"queued", "running", "upstream_pending"}:
+        upstream_task_ids = task.get("upstream_task_ids") or ([task.get("upstream_task_id")] if task.get("upstream_task_id") else [])
+        upstream_task_ids = [str(item).strip() for item in upstream_task_ids if str(item).strip()]
+        if upstream_task_ids:
+            upstream_results = []
+            try:
+                for upstream_task_id in upstream_task_ids:
+                    upstream_results.append(await query_image_task(ImageTaskQueryRequest(provider_id=task.get("provider_id") or "apimart", task_id=upstream_task_id)))
+            except HTTPException as exc:
+                return _update_canvas_task_record(task_id, {
+                    "status": "upstream_pending",
+                    "error": "",
+                    "last_query_error": str(exc.detail or exc),
+                })
+            if any(item.get("status") == "failed" for item in upstream_results):
+                failed = next(item for item in upstream_results if item.get("status") == "failed")
+                return _update_canvas_task_record(task_id, {
+                    "status": "failed",
+                    "error": failed.get("error") or "上游生成任务失败",
+                    "upstream_task_id": failed.get("task_id") or upstream_task_ids[0],
+                })
+            if all(item.get("status") == "succeeded" for item in upstream_results):
+                first = dict(upstream_results[0])
+                first["images"] = [url for item in upstream_results for url in (item.get("images") or [])]
+                first["image_items"] = [entry for item in upstream_results for entry in (item.get("image_items") or [])]
+                first["upstream_task_ids"] = upstream_task_ids
+                return _update_canvas_task_record(task_id, {"status": "succeeded", "result": first, "error": ""})
+            return _update_canvas_task_record(task_id, {"status": "upstream_pending", "error": ""})
     return task
 
 async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
