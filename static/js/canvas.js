@@ -10473,7 +10473,7 @@ function canvasComposerModelOptions(node){
     const mode = node?.mode || 'text';
     const provider = composerApiProvider();
     const apiModels = composerApiImageModels();
-    if(mode === 'text'){
+    if(['text', 'edit', 'enhance', 'angle'].includes(mode)){
         if(apiModels.length){
             return apiModels.map((model, index) => ({
                 id:model,
@@ -10488,9 +10488,6 @@ function canvasComposerModelOptions(node){
         }
         return [{id:'banana-2', label:'Banana 2', icon:'banana', quality:'4K', workflow:'Z-Image.json', type:'zimage'}];
     }
-    if(mode === 'edit') return [{id:'api-edit', label:langIsEn() ? 'Image edit' : '图片编辑', icon:'image-up', quality:'4K', type:'api-image', apiProvider:provider?.id || '', apiModel:apiModels[0] || 'gpt-image-2'}];
-    if(mode === 'enhance') return [{id:'api-enhance', label:langIsEn() ? 'Enhance' : '细节增强', icon:'zap', quality:'2K', type:'api-image', apiProvider:provider?.id || '', apiModel:apiModels[0] || 'gpt-image-2'}];
-    if(mode === 'angle') return [{id:'api-angle', label:langIsEn() ? 'Angle' : '角度控制', icon:'box', quality:'1K', type:'api-image', apiProvider:provider?.id || '', apiModel:apiModels[0] || 'gpt-image-2'}];
     return [{id:'custom', label:canvasComposerShortLabel(node?.comfyWorkflow || 'ComfyUI'), icon:'workflow', quality:'', workflow:node?.comfyWorkflow || '', type:'workflow-custom'}];
 }
 function canvasComposerShortLabel(value, fallback=''){
@@ -10758,11 +10755,11 @@ function canvasComposerCountPopoverHtml(node){
 function canvasComposerOptionBar(node){
     const count = Math.max(1, Math.min(8, Number(node?.count || 1)));
     const mode = node?.mode || 'text';
-    const canUseSize = mode === 'text';
+    const canUseSize = ['text', 'edit', 'enhance', 'angle'].includes(mode);
     const styleLabel = canvasComposerStyleLabel(node?.stylePreset || '');
     const cameraLabel = canvasComposerCameraLabel(node?.cameraPreset || '');
     const modelLabel = canvasComposerModelLabel(node);
-    const sizeLabel = canUseSize ? canvasComposerSizeLabel(node) : (mode === 'enhance' ? `${langIsEn() ? 'Strength' : '强度'} · ${Number(node.enhanceStrength ?? 0.5).toFixed(2)}` : (langIsEn() ? 'Source Size' : '源图尺寸'));
+    const sizeLabel = canUseSize ? canvasComposerSizeLabel(node) : canvasComposerSizeLabel(node);
     const modelIcon = canvasComposerActiveModel(node)?.icon || 'blend';
     return `
         ${canvasComposerModelPopoverHtml(node)}
@@ -11137,47 +11134,26 @@ function renderComfySettings(container, node){
             ${canvasComposerOptionBar(node)}
         `;
     } else if(mode === 'enhance'){
-        const strength = Number(node.enhanceStrength ?? 0.5);
         container.innerHTML = `
-            <div class="canvas-gen-prompt-card canvas-gen-enhance-card">
-                <label class="canvas-gen-slider-field">
-                    <span>${tr('studio.enhancementStrength')}</span>
-                    <strong class="enhance-strength-val">${strength.toFixed(2)}</strong>
-                    <input type="range" class="canvas-range enhance-strength-slider" data-field="enhanceStrength" min="0.1" max="1.0" step="0.05" value="${strength}">
-                </label>
-                <button type="button" class="setting-check ${node.enhanceUpscale ? 'active' : ''}" data-toggle-field="enhanceUpscale"><span class="check-dot"></span>${tr('studio.superResolution')}</button>
-                <select class="select-lite ${node.enhanceUpscale ? '' : 'opacity-40 cursor-not-allowed'}" data-field="enhanceUpscaleRes" ${node.enhanceUpscale ? '' : 'disabled'}><option value="2048">2X (2048)</option><option value="4096">4X (4096)</option></select>
+            <div class="canvas-gen-prompt-card">
+                <textarea class="setting-input canvas-gen-prompt-input" data-field="prompt" placeholder="${langIsEn() ? 'Describe how to enhance this image' : '描述你想增强的方向'}">${escapeHtml(node.prompt || '')}</textarea>
             </div>
             ${canvasComposerOptionBar(node)}
         `;
-        container.querySelector('[data-field="enhanceUpscaleRes"]').value = String(node.enhanceUpscaleRes || 2048);
     } else if(mode === 'edit'){
         container.innerHTML = `
             <div class="canvas-gen-prompt-card">
                 <textarea class="setting-input canvas-gen-prompt-input" data-field="prompt" placeholder="${langIsEn() ? 'Describe the edit you want' : '描述你想要编辑的内容'}">${escapeHtml(node.prompt || '')}</textarea>
-                <div class="canvas-gen-inline-options">
-                    <button type="button" class="setting-check ${node.editUpscale ? 'active' : ''}" data-toggle-field="editUpscale"><span class="check-dot"></span>${tr('studio.superResolution')}</button>
-                    <select class="select-lite ${node.editUpscale ? '' : 'opacity-40 cursor-not-allowed'}" data-field="editUpscaleRes" ${node.editUpscale ? '' : 'disabled'}><option value="2048">2X (2048)</option><option value="4096">4X (4096)</option></select>
-                </div>
             </div>
             ${canvasComposerOptionBar(node)}
         `;
-        container.querySelector('[data-field="editUpscaleRes"]').value = String(node.editUpscaleRes || 2048);
     } else if(mode === 'angle'){
         container.innerHTML = `
             <div class="canvas-gen-prompt-card">
                 <textarea class="setting-input canvas-gen-prompt-input" data-field="prompt" placeholder="${langIsEn() ? 'Describe the target angle' : '描述你想要的新角度'}">${escapeHtml(node.prompt || '')}</textarea>
-                <select class="select-lite canvas-gen-angle-select" data-field="anglePreset">
-                    <option value="">自定义</option>
-                    <option value="front">正面</option>
-                    <option value="side">侧面</option>
-                    <option value="top">俯视</option>
-                    <option value="back">背面</option>
-                </select>
             </div>
             ${canvasComposerOptionBar(node)}
         `;
-        container.querySelector('[data-field="anglePreset"]').value = String(node.anglePreset || '');
     } else if(mode === 'custom'){
         const selected = validComfyWorkflowName(node.comfyWorkflow || comfyWorkflows[0]?.name || '');
         if(node.comfyWorkflow && node.comfyWorkflow !== selected) node.comfyWorkflow = selected;
