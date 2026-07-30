@@ -12151,7 +12151,12 @@ function cascadeStopMessage(reason=''){
     return langIsEn() ? 'One-click run stopped' : '已停止一键运行';
 }
 function cascadeBackendRestartMessage(){
-    return langIsEn() ? 'Backend restarted and task status was lost. This one-click run has been stopped.' : '后端已重启，任务状态已丢失，本次一键运行已停止';
+    return langIsEn()
+        ? 'Task state is temporarily unavailable. The request may still be running upstream; do not submit it again immediately.'
+        : '任务状态暂时不可用。上游可能仍在生成中，请不要立刻重复提交。';
+}
+function canvasTaskRecoveringMessage(){
+    return langIsEn() ? 'Recovering task state...' : '正在恢复任务状态…';
 }
 function normalizeCanvasTaskError(err, fallback=''){
     const raw = err?.message || String(err || '');
@@ -13598,11 +13603,17 @@ async function createCanvasComfyTask(payload, options={}){
 }
 async function waitCanvasComfyTaskResult(taskId, options={}){
     if(!taskId) throw new Error(actionFailed('canvas.comfyGenerate'));
+    const startedAt = Date.now();
     while(true){
         const cascadeTargetId = cascadeTargetIdFromOptions(options);
         if(cascadeTargetId) ensureCascadeActive(cascadeTargetId);
         const res = await cascadeFetch(`/api/canvas-comfy-tasks/${encodeURIComponent(taskId)}`, {}, {cascadeTargetId});
         if(!res.ok){
+            if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
+                setStatus(canvasTaskRecoveringMessage());
+                await sleep(2200);
+                continue;
+            }
             if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
             throw new Error(await responseErrorMessage(res, actionFailed('canvas.comfyGenerate')));
         }
@@ -13692,9 +13703,11 @@ async function queryRecoverPendingOutput(pendingId){
     }
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+const CANVAS_TASK_MISSING_RECOVERY_MS = 120000;
 async function pollCanvasImageTask(taskId, options={}){
     if(!taskId) return 'failed';
     if(activeCanvasTaskPolls.has(taskId)) return 'running';
+    const startedAt = Date.now();
     activeCanvasTaskPolls.add(taskId);
     try {
         while(true){
@@ -13704,6 +13717,11 @@ async function pollCanvasImageTask(taskId, options={}){
             if(cascadeTargetId) ensureCascadeActive(cascadeTargetId);
             const res = await cascadeFetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`, {}, {cascadeTargetId});
             if(!res.ok){
+                if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
+                    setStatus(canvasTaskRecoveringMessage());
+                    await sleep(2200);
+                    continue;
+                }
                 if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
                 throw new Error(await responseErrorMessage(res, tr('canvas.generationFailed')));
             }
@@ -13729,11 +13747,17 @@ async function pollCanvasImageTask(taskId, options={}){
 }
 async function waitCanvasImageTaskResult(taskId, options={}){
     if(!taskId) throw new Error(tr('canvas.generationFailed'));
+    const startedAt = Date.now();
     while(true){
         const cascadeTargetId = cascadeTargetIdFromOptions(options);
         if(cascadeTargetId) ensureCascadeActive(cascadeTargetId);
         const res = await cascadeFetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`, {}, {cascadeTargetId});
         if(!res.ok){
+            if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
+                setStatus(canvasTaskRecoveringMessage());
+                await sleep(2200);
+                continue;
+            }
             if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
             throw new Error(await responseErrorMessage(res, tr('canvas.generationFailed')));
         }
