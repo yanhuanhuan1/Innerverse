@@ -1,0 +1,47 @@
+# Local environments and dependency caches
+.venv/
+venv/
+env/
+python/
+packages/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets
+.env
+.env.*
+!.env.example
+API/.env
+
+# Runtime data
+assets/
+output/
+history.json
+global_config.json
+server*.log
+server.pid
+server.run.log
+_tmp_video_frames/
+
+# User/project data generated at runtime
+data/canvases/
+data/conversations/
+data/media_previews/
+data/asset_library.json
+data/projects.json
+data/api_providers.json
+data/prompt_libraries.json
+data/runninghub_workflows.json
+data/shared_folders.json
+data/storage_settings.json
+data/update_backups/
+data/update_staging/
+
+# Local tooling
+.vercel/
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store

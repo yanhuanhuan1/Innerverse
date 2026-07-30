@@ -1,0 +1,7 @@
+fastapi>=0.117.1,<1.0
+uvicorn>=0.35.0,<1.0
+requests>=2.32.0,<3.0
+pydantic>=2.11.0,<3.0
+python-multipart>=0.0.20,<1.0
+httpx>=0.28.0,<1.0
+pillow>=11.0.0,<13.0
