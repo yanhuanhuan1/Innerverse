@@ -1456,6 +1456,18 @@ os.makedirs(WORKFLOW_DIR, exist_ok=True)
 os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
 
+@app.get("/")
+async def index():
+    return static_html_response("index.html")
+
+@app.get("/home")
+async def home_page():
+    return static_html_response("home.html")
+
+@app.get("/canvas")
+async def canvas_page():
+    return static_html_response("canvas.html")
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
@@ -11500,10 +11512,6 @@ async def build_chat_text_reply(payload, conversation):
     }
 
 # --- 路由接口 ---
-
-@app.get("/")
-async def index():
-    return static_html_response("index.html")
 
 @app.get("/api/view")
 def view_image(filename: str, type: str = "input", subfolder: str = ""):
