@@ -13635,7 +13635,7 @@ async function waitCanvasComfyTaskResult(taskId, options={}){
         if(!res.ok){
             if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
                 setStatus(canvasTaskRecoveringMessage());
-                await sleep(2200);
+                await sleep(canvasTaskRecoveryDelay(Date.now() - startedAt));
                 continue;
             }
             if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
@@ -13727,7 +13727,16 @@ async function queryRecoverPendingOutput(pendingId){
     }
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
-const CANVAS_TASK_MISSING_RECOVERY_MS = 120000;
+// 慢速模型（如 GPT-Image-2 默认 4K）单次生成可能耗时数分钟，
+// 之前 120s 的本地记录恢复窗口太短，稍有波动就会被误判为"后端重启、任务丢失"。
+// 放宽到 30 分钟，和后端 APIMart 异步任务的超时时间保持一致。
+const CANVAS_TASK_MISSING_RECOVERY_MS = 1800000;
+// 恢复轮询用递增间隔，避免长达 30 分钟的等待期内一直按固定短间隔打请求。
+function canvasTaskRecoveryDelay(elapsedMs){
+    if(elapsedMs < 30000) return 2200;
+    if(elapsedMs < 120000) return 4000;
+    return 8000;
+}
 async function pollCanvasImageTask(taskId, options={}){
     if(!taskId) return 'failed';
     if(activeCanvasTaskPolls.has(taskId)) return 'running';
@@ -13759,7 +13768,7 @@ async function pollCanvasImageTask(taskId, options={}){
                 }
                 if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
                     setStatus(canvasTaskRecoveringMessage());
-                    await sleep(2200);
+                    await sleep(canvasTaskRecoveryDelay(Date.now() - startedAt));
                     continue;
                 }
                 if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
@@ -13804,7 +13813,7 @@ async function waitCanvasImageTaskResult(taskId, options={}){
             }
             if(res.status === 404 && Date.now() - startedAt < CANVAS_TASK_MISSING_RECOVERY_MS){
                 setStatus(canvasTaskRecoveringMessage());
-                await sleep(2200);
+                await sleep(canvasTaskRecoveryDelay(Date.now() - startedAt));
                 continue;
             }
             if(res.status === 404) throw new Error(cascadeBackendRestartMessage());
