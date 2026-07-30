@@ -4,12 +4,5 @@
     "app.py": {
       "excludeFiles": "{python/**,packages/**,tests/**,__pycache__/**,_tmp_video_frames/**,assets/**,output/**,data/canvases/**,data/media_previews/**,server*.log,server.pid}"
     }
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/app.py"
-    }
-  ]
+  }
 }
-

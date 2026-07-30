@@ -1460,6 +1460,11 @@ os.makedirs(CANVAS_DIR, exist_ok=True)
 async def index():
     return static_html_response("index.html")
 
+@app.get("/app.py")
+@app.get("/app.py/")
+async def vercel_function_root():
+    return static_html_response("index.html")
+
 @app.get("/home")
 async def home_page():
     return static_html_response("home.html")
@@ -18909,6 +18914,19 @@ def run_workflow(name: str, payload: WorkflowRunRequest):
         client_id=payload.client_id or str(uuid.uuid4()),
     )
     return generate(req)
+
+@app.get("/{full_path:path}")
+async def frontend_fallback(full_path: str):
+    path = (full_path or "").strip("/")
+    if not path or path.startswith(("api/", "static/", "assets/", "output/")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if path in {"home", "home.html"}:
+        return static_html_response("home.html")
+    if path in {"canvas", "canvas.html"}:
+        return static_html_response("canvas.html")
+    if path in {"assets", "asset-manager", "asset-manager.html"}:
+        return static_html_response("asset-manager.html")
+    return static_html_response("index.html")
 
 if __name__ == "__main__":
     import uvicorn
