@@ -15302,7 +15302,6 @@ function startNodeDrag(e, node){
     }
     const children = [...collected.values()];
     dragNode = {node: dragTarget, children, sx:e.clientX, sy:e.clientY, ox:dragTarget.x, oy:dragTarget.y, moved:false};
-    document.body.classList.add('canvas-node-drag');
     window.onmousemove = onNodeDrag;
     window.onmouseup = endDrag;
 }
@@ -15314,6 +15313,9 @@ function onNodeDrag(e){
         dragNode.moved = true;
     }
     if(!dragNode.moved) return;
+    // 真正开始拖动时才禁用底层节点交互（pointer-events），否则普通点击松开时
+    // 点击事件会被重定向到节点容器，永远到不了 stage 的点击处理器（输入框弹不出）。
+    document.body.classList.add('canvas-node-drag');
     const dx = (e.clientX - dragNode.sx) / viewport.scale;
     const dy = (e.clientY - dragNode.sy) / viewport.scale;
     dragNode.node.x = dragNode.ox + dx;
