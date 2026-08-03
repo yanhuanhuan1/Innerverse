@@ -3071,7 +3071,7 @@ function renderMsGenBody(node){
         <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i>Image</span>
+                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
                     ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
                 </div>
                 <div class="canvas-gen-stage-content">
@@ -6511,7 +6511,7 @@ function renderNode(node){
             const missing = isMissingAssetUrl(node.url);
             const mediaKind = mediaKindForNode(node);
             const isEditableImage = mediaKind === 'image' && !missing;
-            body.innerHTML = `<div class="image-preview-wrap">${missing ? missingAssetHtml(node.url) : canvasPreviewImgHtml(node.url, 768, 'draggable="false"')}</div><div class="image-caption text-[11px] text-gray-400 truncate">${escapeHtml(node.name || 'image')}${missing ? ` · ${langIsEn() ? 'missing' : '文件缺失'}` : ''}</div>`;
+            body.innerHTML = `<div class="image-preview-wrap">${missing ? missingAssetHtml(node.url) : canvasPreviewImgHtml(node.url, 768, 'draggable="false"')}</div><div class="image-caption text-[11px] text-gray-400 truncate">${escapeHtml(node.name || '')}${missing ? ` · ${langIsEn() ? 'missing' : '文件缺失'}` : ''}</div>`;
             if(!missing && mediaKind !== 'image'){
                 const mediaHtml = mediaKind === 'video'
                     ? `<div class="media-card video-card">${canvasVideoPreviewHtml(node.url, 768, 'draggable="false" data-video-fallback-attrs="controls"')}<button class="canvas-video-play" type="button" title="播放"><i data-lucide="play"></i></button></div>`
@@ -8570,7 +8570,7 @@ function renderGeneratorBody(node){
         <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i>Image</span>
+                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i></span>
                     ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
                 </div>
                 <div class="canvas-gen-stage-content">
@@ -8916,7 +8916,7 @@ function renderVideoBody(node){
         <div class="canvas-gen-shell canvas-video-template ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage video-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="${escapeHtml(stageLabel)}">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="${stageIcon}" class="w-3.5 h-3.5"></i>${stageLabel}</span>
+                    <span><i data-lucide="${stageIcon}" class="w-3.5 h-3.5"></i></span>
                     ${hasInlineOutput ? stageAction : ''}
                 </div>
                 <div class="canvas-gen-stage-content"></div>
@@ -8976,7 +8976,7 @@ function renderVideoBody(node){
                     </div>
                 </div>
                 <div class="canvas-gen-bottom">
-                    <button class="gen-btn canvas-gen-run ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''} title="${node.running ? tr('canvas.generating') : tr('canvas.videoGenerate')}"><i data-lucide="${node.running ? 'loader-2' : 'arrow-up'}" class="w-4 h-4"></i></button>
+                    ${canvasComposerRunButtonHtml(node, 'video-run')}
                     ${cascadeBtnHtml(node)}
                 </div>
                 ${retryBarHtml(node)}
@@ -9053,7 +9053,7 @@ function renderVideoBody(node){
         renderVideoImageInputs(stageContent.querySelector('.video-img-list'), node, mediaInputs);
     }
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
-    wrap.querySelector('.gen-btn').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
+    wrap.querySelector('.video-run').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
     bindCascadeButtons(wrap, node.id);
     bindCanvasInputPanelToggle(wrap, node);
     return wrap;
@@ -9434,7 +9434,7 @@ function renderComfyBody(node){
         <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="${escapeHtml(stageLabel)}">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="${stageIcon}" class="w-3.5 h-3.5"></i>${stageLabel}</span>
+                    <span><i data-lucide="${stageIcon}" class="w-3.5 h-3.5"></i></span>
                     ${stageAction}
                 </div>
                 <div class="canvas-gen-stage-content"></div>
@@ -9966,7 +9966,7 @@ function renderRhBody(node){
         <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="workflow" class="w-3.5 h-3.5"></i>Image</span>
+                    <span><i data-lucide="workflow" class="w-3.5 h-3.5"></i></span>
                     ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
                 </div>
                 <div class="canvas-gen-stage-content">
@@ -12438,7 +12438,7 @@ function renderLTXDirectorBody(node){
         <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
             <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
                 <div class="canvas-gen-stage-head">
-                    <span><i data-lucide="film" class="w-3.5 h-3.5"></i>Image</span>
+                    <span><i data-lucide="film" class="w-3.5 h-3.5"></i></span>
                     ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
                 </div>
                 <div class="canvas-gen-stage-content">
