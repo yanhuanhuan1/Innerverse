@@ -8944,24 +8944,14 @@ function renderVideoBody(node){
             </div>
         </div>
     `;
-    const providerSelect = wrap.querySelector('.video-provider');
-    const modelSelect = wrap.querySelector('.video-model');
     const promptInput = wrap.querySelector('.video-prompt');
-    providerSelect.value = node.apiProvider;
-    [promptInput, providerSelect, modelSelect].forEach(input => {
-        input.onmousedown = e => e.stopPropagation();
-        input.onclick = e => e.stopPropagation();
-    });
+    promptInput.onmousedown = e => e.stopPropagation();
+    promptInput.onclick = e => e.stopPropagation();
     promptInput.oninput = e => { e.stopPropagation(); node.prompt = e.target.value; scheduleSave(); };
-    providerSelect.onchange = e => {
-        e.stopPropagation();
-        node.apiProvider = e.target.value;
-        const models = providerVideoModels(node.apiProvider);
-        if(!models.includes(node.model)) node.model = models[0] || node.model;
-        modelSelect.innerHTML = videoModelOptions(node.model, node.apiProvider);
-        scheduleSave();
-    };
-    modelSelect.onchange = e => { e.stopPropagation(); node.model = e.target.value; scheduleSave(); };
+    wrap.querySelectorAll('[data-video-model]').forEach(btn => {
+        btn.onmousedown = e => e.stopPropagation();
+        btn.onclick = e => { e.stopPropagation(); selectVideoModel(node.id, btn.dataset.videoModel); };
+    });
     wrap.querySelectorAll('[data-video-duration], [data-video-aspect], [data-video-resolution]').forEach(btn => {
         btn.onmousedown = e => e.stopPropagation();
         btn.onclick = e => {
@@ -9008,8 +8998,8 @@ function renderVideoBody(node){
     if(hasInlineOutput){
         renderInlineGeneratedOutputs(stageContent, node);
     } else if(stageContent) {
-        stageContent.innerHTML = '<div class="input-list video-img-list"></div>';
-        renderVideoImageInputs(stageContent.querySelector('.video-img-list'), node, mediaInputs);
+        // 图片节点连接到视频节点时，舞台保持空白，不预览输入图片。
+        stageContent.innerHTML = canvasEmptyImageStageHtml();
     }
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
     const videoSettings = wrap.querySelector('.comfy-settings');
@@ -10914,12 +10904,31 @@ function canvasVideoToggleTokenHtml(node, field, label){
     return `<button type="button" class="canvas-gen-token canvas-video-toggle-token ${active ? 'active' : ''}" data-video-toggle="${field}"><i data-lucide="${active ? 'check' : 'circle'}" class="w-3.5 h-3.5"></i><span class="canvas-gen-token-label">${escapeHtml(label)}</span></button>`;
 }
 function canvasVideoModelPopoverHtml(node){
+    const models = allVideoModels();
     return `<div class="canvas-gen-popover canvas-gen-model-popover" data-composer-popover="video-model" ${canvasComposerPopoverIsOpen(node, 'video-model') ? '' : 'hidden'}>
-        <div class="canvas-gen-popover-title">${langIsEn() ? 'Provider' : '平台'}</div>
-        <select class="select-lite video-provider">${videoProviderOptions(node.apiProvider)}</select>
-        <div class="canvas-gen-popover-title" style="margin-top:10px">${langIsEn() ? 'Model' : '模型'}</div>
-        <select class="select-lite video-model">${videoModelOptions(node.model, node.apiProvider)}</select>
+        <div class="canvas-gen-popover-title">${langIsEn() ? 'Model' : '模型'}</div>
+        ${models.length
+            ? models.map(m => `<button type="button" class="canvas-gen-model-option ${node.model === m ? 'active' : ''}" data-video-model="${escapeAttr(m)}" title="${escapeHtml(m)}">
+                <span class="canvas-gen-model-main"><span class="canvas-gen-model-name">${escapeHtml(m)}</span></span>
+                ${node.model === m ? '<i data-lucide="check" class="canvas-gen-model-check w-5 h-5"></i>' : ''}
+            </button>`).join('')
+            : `<div class="canvas-gen-popover-title muted">${tr('canvas.noModelsHint') || '暂无模型，请到 API 设置添加'}</div>`}
     </div>`;
+}
+function allVideoModels(){
+    const fromProviders = uniqueModels(videoApiProviders().flatMap(p => providerVideoModels(p.id)));
+    if(fromProviders.length) return fromProviders;
+    return uniqueModels(videoModels.length ? videoModels : DEFAULT_VIDEO_MODELS);
+}
+function selectVideoModel(nodeId, model){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node) return;
+    node.model = model;
+    const provider = videoApiProviders().find(p => providerVideoModels(p.id).includes(model));
+    if(provider) node.apiProvider = provider.id;
+    canvasComposerPopover = {nodeId:'', kind:''};
+    scheduleSave();
+    refreshNodes([node.id]);
 }
 function canvasVideoDurationPopoverHtml(node){
     const durations = [3, 5, 8, 10, 15, 30, 60];
