@@ -19,12 +19,12 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/theme.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/i18n.js?v=2026.07.23.1784878252"></script>
-    <link rel="stylesheet" href="/static/css/home.css?v=2026.08.03.email">
+    <link rel="stylesheet" href="/static/css/home.css?v=2026.08.03.password-auth">
 </head>
 <body>
     <main class="home-shell">
         <header class="home-status">
-            <button id="emailLoginBtn" class="home-pill-btn auth-login" type="button" title="邮箱登录" aria-label="邮箱登录"><i data-lucide="mail"></i><span>邮箱登录</span></button>
+            <button id="emailLoginBtn" class="home-pill-btn auth-login" type="button" title="登录" aria-label="登录" hidden><i data-lucide="mail"></i><span>登录</span></button>
             <div id="homeUserBox" class="home-user-box" hidden>
                 <img id="homeUserAvatar" alt="" />
                 <span id="homeUserName">用户</span>
@@ -62,24 +62,37 @@
             <div class="auth-modal-backdrop" data-close-email-login></div>
             <form id="emailLoginForm" class="auth-card">
                 <button class="auth-close" type="button" data-close-email-login aria-label="关闭"><i data-lucide="x"></i></button>
-                <h3>邮箱验证码登录</h3>
-                <p>输入邮箱后获取验证码，登录后你的项目和画布会独立保存。</p>
+                <h3 id="authTitle">邮箱登录</h3>
+                <p id="authDesc">使用邮箱和密码登录。第一次使用请先注册账号。</p>
+                <div class="auth-tabs" role="tablist" aria-label="登录方式">
+                    <button id="authLoginTab" class="active" type="button">登录</button>
+                    <button id="authRegisterTab" type="button">注册</button>
+                </div>
+                <label id="authNameLabel" hidden>
+                    <span>用户名</span>
+                    <input id="loginNameInput" type="text" autocomplete="nickname" placeholder="给自己取一个名字">
+                </label>
                 <label>
                     <span>邮箱</span>
                     <input id="loginEmailInput" type="email" autocomplete="email" placeholder="name@example.com" required>
                 </label>
-                <div class="auth-code-row">
+                <label>
+                    <span>密码</span>
+                    <input id="loginPasswordInput" type="password" autocomplete="current-password" minlength="8" maxlength="128" placeholder="至少 8 位密码" required>
+                </label>
+                <button id="verifyEmailCodeBtn" class="auth-submit" type="submit">登录</button>
+                <button id="emailCodeFallbackBtn" class="auth-link-btn" type="button">使用邮箱验证码登录</button>
+                <div id="authCodeFields" class="auth-code-row" hidden>
                     <label>
                         <span>验证码</span>
                         <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">
                     </label>
                     <button id="sendEmailCodeBtn" type="button">获取验证码</button>
                 </div>
-                <button id="verifyEmailCodeBtn" class="auth-submit" type="submit">登录</button>
                 <div id="emailLoginHint" class="auth-hint"></div>
             </form>
         </div>
     </main>
-    <script src="/static/js/home.js?v=2026.08.03.email"></script>
+    <script src="/static/js/home.js?v=2026.08.03.password-auth"></script>
 </body>
 </html>

@@ -78,6 +78,7 @@ def _ensure_schema(conn) -> bool:
                 wechat_openid TEXT UNIQUE,
                 wechat_unionid TEXT UNIQUE,
                 provider TEXT NOT NULL DEFAULT 'email',
+                password_hash TEXT NOT NULL DEFAULT '',
                 nickname TEXT NOT NULL DEFAULT '',
                 avatar_url TEXT NOT NULL DEFAULT '',
                 raw JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -89,6 +90,7 @@ def _ensure_schema(conn) -> bool:
         )
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT UNIQUE")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'email'")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS email_login_codes (
@@ -205,19 +207,20 @@ def _json_payload(data: Dict[str, Any]) -> str:
 def _user_from_row(row) -> Optional[Dict[str, Any]]:
     if not row:
         return None
-    if len(row) >= 11:
+    if len(row) >= 12:
         return {
             "id": row[0],
             "email": row[1] or "",
             "wechat_openid": row[2] or "",
             "wechat_unionid": row[3] or "",
             "provider": row[4] or "",
-            "nickname": row[5] or "",
-            "avatar_url": row[6] or "",
-            "raw": row[7] if isinstance(row[7], dict) else {},
-            "created_at": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8],
-            "updated_at": row[9].isoformat() if hasattr(row[9], "isoformat") else row[9],
-            "last_login_at": row[10].isoformat() if hasattr(row[10], "isoformat") else row[10],
+            "password_hash": row[5] or "",
+            "nickname": row[6] or "",
+            "avatar_url": row[7] or "",
+            "raw": row[8] if isinstance(row[8], dict) else {},
+            "created_at": row[9].isoformat() if hasattr(row[9], "isoformat") else row[9],
+            "updated_at": row[10].isoformat() if hasattr(row[10], "isoformat") else row[10],
+            "last_login_at": row[11].isoformat() if hasattr(row[11], "isoformat") else row[11],
         }
     return {
         "id": row[0],
@@ -246,7 +249,7 @@ def upsert_wechat_user(openid: str, unionid: str = "", nickname: str = "", avata
         try:
             cur = conn.execute(
                 """
-                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
                 FROM users
                 WHERE wechat_openid = %s OR (%s IS NOT NULL AND wechat_unionid = %s)
                 LIMIT 1
@@ -275,7 +278,7 @@ def upsert_wechat_user(openid: str, unionid: str = "", nickname: str = "", avata
             )
             cur = conn.execute(
                 """
-                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
                 FROM users WHERE id = %s
                 """,
                 (user_id,),
@@ -312,7 +315,7 @@ def upsert_email_user(email: str) -> Optional[Dict[str, Any]]:
             )
             cur = conn.execute(
                 """
-                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
                 FROM users WHERE email = %s
                 """,
                 (email,),
@@ -321,6 +324,94 @@ def upsert_email_user(email: str) -> Optional[Dict[str, Any]]:
         except Exception as exc:
             print(f"[storage_db] upsert_email_user failed: {exc}")
             return None
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    email = str(email or "").strip().lower()
+    if not email:
+        return None
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users WHERE email = %s
+                """,
+                (email,),
+            )
+            return _user_from_row(cur.fetchone())
+        except Exception as exc:
+            print(f"[storage_db] get_user_by_email failed: {exc}")
+            return None
+
+
+def create_email_password_user(email: str, nickname: str, password_hash: str) -> Optional[Dict[str, Any]]:
+    email = str(email or "").strip().lower()
+    nickname = str(nickname or "").strip()[:80]
+    password_hash = str(password_hash or "").strip()
+    if not email or not nickname or not password_hash:
+        return None
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users WHERE email = %s
+                """,
+                (email,),
+            )
+            existing = _user_from_row(cur.fetchone())
+            if existing and existing.get("password_hash"):
+                return {"error": "exists"}
+            user_id = existing.get("id") if existing else uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO users (id, email, provider, password_hash, nickname, raw, created_at, updated_at, last_login_at)
+                VALUES (%s, %s, 'email-password', %s, %s, %s::jsonb, now(), now(), now())
+                ON CONFLICT (email)
+                DO UPDATE SET
+                    provider = 'email-password',
+                    password_hash = EXCLUDED.password_hash,
+                    nickname = EXCLUDED.nickname,
+                    updated_at = now(),
+                    last_login_at = now()
+                WHERE users.password_hash = ''
+                """,
+                (user_id, email, password_hash, nickname, _json_payload({"provider": "email-password"})),
+            )
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, password_hash, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users WHERE email = %s
+                """,
+                (email,),
+            )
+            return _user_from_row(cur.fetchone())
+        except Exception as exc:
+            print(f"[storage_db] create_email_password_user failed: {exc}")
+            return None
+
+
+def mark_user_login(user_id: str) -> bool:
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            conn.execute("UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = %s", (user_id,))
+            return True
+        except Exception as exc:
+            print(f"[storage_db] mark_user_login failed: {exc}")
+            return False
 
 
 def create_email_login_code(email: str, code_hash: str, expires_at: datetime.datetime, ip: str = "", user_agent: str = "") -> bool:
@@ -413,7 +504,7 @@ def get_session(session_hash: str) -> Optional[Dict[str, Any]]:
             cur = conn.execute(
                 """
                 SELECT s.id, s.expires_at,
-                       u.id, u.email, u.wechat_openid, u.wechat_unionid, u.provider, u.nickname, u.avatar_url, u.raw, u.created_at, u.updated_at, u.last_login_at
+                       u.id, u.email, u.wechat_openid, u.wechat_unionid, u.provider, u.password_hash, u.nickname, u.avatar_url, u.raw, u.created_at, u.updated_at, u.last_login_at
                 FROM sessions s
                 JOIN users u ON u.id = s.user_id
                 WHERE s.session_hash = %s AND s.expires_at > now()
@@ -424,7 +515,7 @@ def get_session(session_hash: str) -> Optional[Dict[str, Any]]:
             row = cur.fetchone()
             if not row:
                 return None
-            user = _user_from_row((row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12]))
+            user = _user_from_row((row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13]))
             return {
                 "id": row[0],
                 "expires_at": row[1].isoformat() if hasattr(row[1], "isoformat") else row[1],

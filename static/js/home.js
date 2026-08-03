@@ -13,10 +13,19 @@ const homeLanguageBtn = document.getElementById('homeLanguageBtn');
 const emailLoginBtn = document.getElementById('emailLoginBtn');
 const emailLoginModal = document.getElementById('emailLoginModal');
 const emailLoginForm = document.getElementById('emailLoginForm');
+const authTitle = document.getElementById('authTitle');
+const authDesc = document.getElementById('authDesc');
+const authLoginTab = document.getElementById('authLoginTab');
+const authRegisterTab = document.getElementById('authRegisterTab');
+const authNameLabel = document.getElementById('authNameLabel');
+const loginNameInput = document.getElementById('loginNameInput');
 const loginEmailInput = document.getElementById('loginEmailInput');
+const loginPasswordInput = document.getElementById('loginPasswordInput');
 const loginCodeInput = document.getElementById('loginCodeInput');
 const sendEmailCodeBtn = document.getElementById('sendEmailCodeBtn');
 const verifyEmailCodeBtn = document.getElementById('verifyEmailCodeBtn');
+const emailCodeFallbackBtn = document.getElementById('emailCodeFallbackBtn');
+const authCodeFields = document.getElementById('authCodeFields');
 const emailLoginHint = document.getElementById('emailLoginHint');
 const homeUserBox = document.getElementById('homeUserBox');
 const homeUserAvatar = document.getElementById('homeUserAvatar');
@@ -33,6 +42,7 @@ let pendingDeleteProjectId = null;
 let homeFocus = 'hero';
 let homeWheelGate = 0;
 let emailCodeCooldownTimer = null;
+let authMode = 'login';
 const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
 const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
 
@@ -148,6 +158,12 @@ function applyHomeStaticCopy(){
     setText('#recentTitleBtn h2', '项目', 'Projects');
     setText('#recentTitleBtn p', '所有项目都在这里，点击项目直接进入画布。', 'All projects are here. Click one to enter its canvas.');
     setText('#projectQuickCreate span', '新建项目', 'New project');
+    setText('#emailLoginBtn span', '登录', 'Sign in');
+    setText('#authLoginTab', '登录', 'Sign in');
+    setText('#authRegisterTab', '注册', 'Create account');
+    setText('#emailCodeFallbackBtn', authMode === 'code' ? '使用密码登录' : '使用邮箱验证码登录', authMode === 'code' ? 'Use password sign-in' : 'Use email code instead');
+    setText('#verifyEmailCodeBtn', authMode === 'register' ? '注册并登录' : '登录', authMode === 'register' ? 'Create account' : 'Sign in');
+    if(authMode) setAuthMode(authMode, {silent:true});
 }
 
 function applyLanguage(){
@@ -283,7 +299,7 @@ function updateAuthUI(){
     if(emailLoginBtn) emailLoginBtn.hidden = loggedIn;
     if(homeUserBox) homeUserBox.hidden = !loggedIn;
     if(loggedIn) {
-        if(homeUserName) homeUserName.textContent = currentUser.email || currentUser.nickname || L('用户','User');
+        if(homeUserName) homeUserName.textContent = currentUser.nickname || currentUser.email || L('用户','User');
         if(homeUserAvatar) {
             homeUserAvatar.src = currentUser.avatar_url || '/static/images/logo.png';
             homeUserAvatar.alt = currentUser.nickname || '';
@@ -317,9 +333,35 @@ function setEmailLoginHint(text, isError=false){
     emailLoginHint.classList.toggle('error', Boolean(isError));
 }
 
+function setAuthMode(mode, options={}){
+    authMode = ['login','register','code'].includes(mode) ? mode : 'login';
+    const isRegister = authMode === 'register';
+    const isCode = authMode === 'code';
+    authLoginTab?.classList.toggle('active', authMode === 'login' || isCode);
+    authRegisterTab?.classList.toggle('active', isRegister);
+    if(authTitle) authTitle.textContent = isRegister ? L('创建账号','Create account') : L('邮箱登录','Email sign-in');
+    if(authDesc) authDesc.textContent = isRegister
+        ? L('填写用户名、邮箱和密码。注册后项目会按账号独立保存。','Choose a username, email, and password. Your projects stay private to this account.')
+        : (isCode ? L('验证码登录作为备用方式，可能需要等待邮件送达。','Email code sign-in is a fallback and may take a moment to arrive.')
+            : L('使用邮箱和密码登录。第一次使用请先注册账号。','Sign in with your email and password. Create an account first if this is your first time.'));
+    if(authNameLabel) authNameLabel.hidden = !isRegister;
+    if(authCodeFields) authCodeFields.hidden = !isCode;
+    if(loginPasswordInput) {
+        loginPasswordInput.closest('label').hidden = isCode;
+        loginPasswordInput.required = !isCode;
+        loginPasswordInput.autocomplete = isRegister ? 'new-password' : 'current-password';
+    }
+    if(loginNameInput) loginNameInput.required = isRegister;
+    if(verifyEmailCodeBtn) verifyEmailCodeBtn.textContent = isRegister ? L('注册并登录','Create account') : L('登录','Sign in');
+    if(emailCodeFallbackBtn) emailCodeFallbackBtn.textContent = isCode ? L('使用密码登录','Use password sign-in') : L('使用邮箱验证码登录','Use email code instead');
+    if(!options.silent) setEmailLoginHint('');
+    refreshIcons();
+}
+
 function openEmailLogin(){
     if(!emailLoginModal) return;
     emailLoginModal.hidden = false;
+    setAuthMode('login', {silent:true});
     setEmailLoginHint('');
     setTimeout(() => loginEmailInput?.focus(), 30);
     refreshIcons();
@@ -405,6 +447,55 @@ async function verifyEmailCode(){
     } finally {
         if(verifyEmailCodeBtn) verifyEmailCodeBtn.disabled = false;
     }
+}
+
+async function submitEmailPasswordAuth(){
+    const email = (loginEmailInput?.value || '').trim();
+    const password = (loginPasswordInput?.value || '');
+    const nickname = (loginNameInput?.value || '').trim();
+    if(!email) {
+        setEmailLoginHint(L('请输入邮箱','Enter your email'), true);
+        loginEmailInput?.focus();
+        return;
+    }
+    if(authMode === 'register' && !nickname) {
+        setEmailLoginHint(L('请输入用户名','Enter a username'), true);
+        loginNameInput?.focus();
+        return;
+    }
+    if(password.length < 8) {
+        setEmailLoginHint(L('密码至少需要 8 位','Password must be at least 8 characters'), true);
+        loginPasswordInput?.focus();
+        return;
+    }
+    const endpoint = authMode === 'register' ? '/api/auth/email/register' : '/api/auth/email/login';
+    const body = authMode === 'register' ? {email, password, nickname} : {email, password};
+    try {
+        verifyEmailCodeBtn.disabled = true;
+        setEmailLoginHint(authMode === 'register' ? L('正在创建账号……','Creating account...') : L('正在登录……','Signing in...'));
+        const res = await fetch(endpoint, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(body)
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || 'auth failed');
+        currentUser = data.user || null;
+        closeEmailLogin();
+        updateAuthUI();
+        await loadHomeData();
+        showStatus(authMode === 'register' ? L('账号已创建','Account created') : L('已登录','Signed in'));
+    } catch(err) {
+        console.error(err);
+        setEmailLoginHint(err.message || L('登录失败','Sign in failed'), true);
+    } finally {
+        if(verifyEmailCodeBtn) verifyEmailCodeBtn.disabled = false;
+    }
+}
+
+function submitEmailAuth(){
+    if(authMode === 'code') return verifyEmailCode();
+    return submitEmailPasswordAuth();
 }
 
 async function logout(){
@@ -836,10 +927,13 @@ if(window.StudioI18n) StudioI18n.apply();
 applyHomeStaticCopy();
 setMode('text');
 emailLoginBtn?.addEventListener('click', openEmailLogin);
+authLoginTab?.addEventListener('click', () => setAuthMode('login'));
+authRegisterTab?.addEventListener('click', () => setAuthMode('register'));
+emailCodeFallbackBtn?.addEventListener('click', () => setAuthMode(authMode === 'code' ? 'login' : 'code'));
 sendEmailCodeBtn?.addEventListener('click', sendEmailCode);
 emailLoginForm?.addEventListener('submit', event => {
     event.preventDefault();
-    verifyEmailCode();
+    submitEmailAuth();
 });
 emailLoginModal?.querySelectorAll('[data-close-email-login]').forEach(el => el.addEventListener('click', closeEmailLogin));
 loginCodeInput?.addEventListener('input', () => {

@@ -261,13 +261,9 @@ DEFAULT_STORAGE_DIRS = {
     "local": LOCAL_UPLOAD_DIR,
 }
 
-WECHAT_APP_ID = str(os.getenv("WECHAT_APP_ID", "")).strip()
-WECHAT_APP_SECRET = str(os.getenv("WECHAT_APP_SECRET", "")).strip()
-WECHAT_REDIRECT_URI = str(os.getenv("WECHAT_REDIRECT_URI", "")).strip()
 PUBLIC_BASE_URL = str(os.getenv("PUBLIC_BASE_URL", "")).strip().rstrip("/")
 AUTH_SESSION_SECRET = str(os.getenv("AUTH_SESSION_SECRET", "")).strip()
 AUTH_COOKIE_NAME = str(os.getenv("AUTH_COOKIE_NAME", "innerverse_session")).strip() or "innerverse_session"
-AUTH_STATE_COOKIE_NAME = "innerverse_oauth_state"
 AUTH_SESSION_DAYS = int(os.getenv("AUTH_SESSION_DAYS", "30") or "30")
 AUTH_COOKIE_SECURE = str(os.getenv("AUTH_COOKIE_SECURE", "auto")).strip().lower()
 EMAIL_PROVIDER = str(os.getenv("EMAIL_PROVIDER", "resend")).strip().lower()
@@ -282,9 +278,6 @@ def auth_is_configured():
 
 def email_auth_is_configured():
     return bool(auth_is_configured() and EMAIL_PROVIDER == "resend" and RESEND_API_KEY and EMAIL_FROM)
-
-def wechat_auth_is_configured():
-    return bool(auth_is_configured() and WECHAT_APP_ID and WECHAT_APP_SECRET)
 
 def auth_cookie_secure(request: Request = None):
     if AUTH_COOKIE_SECURE in {"1", "true", "yes", "on"}:
@@ -306,6 +299,26 @@ def auth_code_hash(email: str, code: str):
     payload = f"{str(email or '').strip().lower()}:{str(code or '').strip()}"
     return hmac.new(AUTH_SESSION_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
+def password_hash_value(password: str):
+    password = str(password or "")
+    salt = secrets.token_bytes(16)
+    iterations = 240000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return f"pbkdf2_sha256${iterations}${base64.urlsafe_b64encode(salt).decode('ascii')}${base64.urlsafe_b64encode(digest).decode('ascii')}"
+
+def verify_password_hash(password: str, stored_hash: str):
+    try:
+        algo, iterations_text, salt_text, digest_text = str(stored_hash or "").split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_text)
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+        actual = hashlib.pbkdf2_hmac("sha256", str(password or "").encode("utf-8"), salt, iterations)
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
 def request_origin(request: Request):
     if PUBLIC_BASE_URL:
         return PUBLIC_BASE_URL
@@ -315,16 +328,21 @@ def request_origin(request: Request):
         return f"{forwarded_proto or request.url.scheme}://{forwarded_host}".rstrip("/")
     return str(request.base_url).rstrip("/")
 
-def wechat_callback_url(request: Request):
-    if WECHAT_REDIRECT_URI:
-        return WECHAT_REDIRECT_URI
-    return f"{request_origin(request)}/api/auth/wechat/callback"
-
 def normalize_login_email(email: str):
     value = str(email or "").strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
         return ""
     return value[:254]
+
+def normalize_nickname(nickname: str):
+    value = re.sub(r"\s+", " ", str(nickname or "").strip())
+    return value[:40]
+
+def validate_login_password(password: str):
+    value = str(password or "")
+    if len(value) < 8 or len(value) > 128:
+        return ""
+    return value
 
 def session_user_from_request(request: Request):
     token = request.cookies.get(AUTH_COOKIE_NAME, "")
@@ -336,26 +354,8 @@ def session_user_from_request(request: Request):
     session = storage_db.get_session(session_hash) if storage_db.is_configured() else None
     return session.get("user") if isinstance(session, dict) and isinstance(session.get("user"), dict) else None
 
-def require_current_user(request: Request):
-    if not auth_is_configured():
-        raise HTTPException(status_code=503, detail="微信登录尚未配置")
-    user = session_user_from_request(request)
-    if not user or not user.get("id"):
-        raise HTTPException(status_code=401, detail="请先登录")
-    return user
-
-def response_user(user):
-    if not user:
-        return None
-    return {
-        "id": user.get("id"),
-        "nickname": user.get("nickname") or "微信用户",
-        "avatar_url": user.get("avatar_url") or "",
-    }
-
-# Auth v2 uses email verification as the primary login method. These
-# definitions intentionally override the earlier WeChat-shaped helpers while
-# keeping the old OAuth routes available for future use.
+# Auth v2 uses email accounts as the primary login method. Email-code
+# verification remains only as a fallback for accounts without a password.
 def require_current_user(request: Request):
     if not auth_is_configured():
         raise HTTPException(status_code=503, detail="登录尚未配置")
@@ -374,6 +374,22 @@ def response_user(user):
         "nickname": user.get("nickname") or user.get("email") or "用户",
         "avatar_url": user.get("avatar_url") or "",
     }
+def create_auth_session_response(user, request: Request):
+    token = secrets.token_urlsafe(32)
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=AUTH_SESSION_DAYS)
+    if not storage_db.create_session(
+        user_id=user["id"],
+        session_hash=auth_token_hash(token),
+        expires_at=expires,
+        user_agent=request.headers.get("user-agent", ""),
+        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
+    ):
+        raise HTTPException(status_code=500, detail="Failed to create auth session")
+    res = JSONResponse({"ok": True, "user": response_user(user)})
+    max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
+    res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
+    return res
+
 
 def _storage_abs_path(value, fallback):
     text = str(value or "").strip()
@@ -2911,6 +2927,15 @@ class EmailLoginStartRequest(BaseModel):
 class EmailLoginVerifyRequest(BaseModel):
     email: str
     code: str
+
+class EmailPasswordRegisterRequest(BaseModel):
+    email: str
+    password: str
+    nickname: str
+
+class EmailPasswordLoginRequest(BaseModel):
+    email: str
+    password: str
 
 class CanvasSaveRequest(BaseModel):
     title: str = "未命名画布"
@@ -16374,6 +16399,40 @@ async def auth_me(request: Request):
         raise HTTPException(status_code=401, detail="请先登录")
     return {"user": response_user(user)}
 
+@app.post("/api/auth/email/register")
+async def email_password_register(payload: EmailPasswordRegisterRequest, request: Request):
+    if not auth_is_configured():
+        raise HTTPException(status_code=503, detail="Login is not configured")
+    email = normalize_login_email(payload.email)
+    nickname = normalize_nickname(payload.nickname)
+    password = validate_login_password(payload.password)
+    if not email:
+        raise HTTPException(status_code=400, detail="Enter a valid email")
+    if not nickname:
+        raise HTTPException(status_code=400, detail="Enter a username")
+    if not password:
+        raise HTTPException(status_code=400, detail="Password must be 8-128 characters")
+    user = storage_db.create_email_password_user(email, nickname, password_hash_value(password))
+    if isinstance(user, dict) and user.get("error") == "exists":
+        raise HTTPException(status_code=409, detail="This email is already registered")
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to create user")
+    return create_auth_session_response(user, request)
+
+@app.post("/api/auth/email/login")
+async def email_password_login(payload: EmailPasswordLoginRequest, request: Request):
+    if not auth_is_configured():
+        raise HTTPException(status_code=503, detail="Login is not configured")
+    email = normalize_login_email(payload.email)
+    password = str(payload.password or "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Enter email and password")
+    user = storage_db.get_user_by_email(email)
+    if not user or not user.get("password_hash") or not verify_password_hash(password, user.get("password_hash")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    storage_db.mark_user_login(user["id"])
+    return create_auth_session_response(user, request)
+
 @app.post("/api/auth/email/start")
 async def email_login_start(payload: EmailLoginStartRequest, request: Request):
     if not email_auth_is_configured():
@@ -16426,101 +16485,6 @@ async def email_login_verify(payload: EmailLoginVerifyRequest, request: Request)
     res = JSONResponse({"ok": True, "user": response_user(user)})
     max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
     res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
-    return res
-
-@app.get("/api/auth/wechat/login")
-async def wechat_login(request: Request):
-    if not wechat_auth_is_configured():
-        raise HTTPException(status_code=503, detail="微信登录尚未配置：请设置 DATABASE_URL、WECHAT_APP_ID、WECHAT_APP_SECRET 和 AUTH_SESSION_SECRET")
-    state = secrets.token_urlsafe(24)
-    callback = wechat_callback_url(request)
-    params = urllib.parse.urlencode({
-        "appid": WECHAT_APP_ID,
-        "redirect_uri": callback,
-        "response_type": "code",
-        "scope": "snsapi_login",
-        "state": state,
-    })
-    url = f"https://open.weixin.qq.com/connect/qrconnect?{params}#wechat_redirect"
-    res = JSONResponse({"url": url, "redirect_uri": callback})
-    res.set_cookie(
-        AUTH_STATE_COOKIE_NAME,
-        state,
-        max_age=600,
-        httponly=True,
-        secure=auth_cookie_secure(request),
-        samesite="lax",
-        path="/",
-    )
-    return res
-
-@app.get("/api/auth/wechat/callback")
-async def wechat_callback(request: Request, code: str = "", state: str = ""):
-    if not wechat_auth_is_configured():
-        raise HTTPException(status_code=503, detail="微信登录尚未配置")
-    expected_state = request.cookies.get(AUTH_STATE_COOKIE_NAME, "")
-    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
-        raise HTTPException(status_code=400, detail="微信登录状态已过期，请重新登录")
-    if not code:
-        raise HTTPException(status_code=400, detail="缺少微信授权 code")
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            token_res = await client.get(
-                "https://api.weixin.qq.com/sns/oauth2/access_token",
-                params={
-                    "appid": WECHAT_APP_ID,
-                    "secret": WECHAT_APP_SECRET,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                },
-            )
-            token_data = token_res.json()
-            if token_data.get("errcode"):
-                raise HTTPException(status_code=502, detail=f"微信授权失败：{token_data.get('errmsg') or token_data.get('errcode')}")
-            access_token = str(token_data.get("access_token") or "")
-            openid = str(token_data.get("openid") or "")
-            unionid = str(token_data.get("unionid") or "")
-            if not access_token or not openid:
-                raise HTTPException(status_code=502, detail="微信授权返回缺少 access_token 或 openid")
-            profile = {}
-            try:
-                user_res = await client.get(
-                    "https://api.weixin.qq.com/sns/userinfo",
-                    params={"access_token": access_token, "openid": openid, "lang": "zh_CN"},
-                )
-                profile = user_res.json()
-                if profile.get("errcode"):
-                    profile = {}
-            except Exception:
-                profile = {}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"微信登录请求失败：{exc}") from exc
-
-    user = storage_db.upsert_wechat_user(
-        openid=openid,
-        unionid=str(profile.get("unionid") or unionid or ""),
-        nickname=str(profile.get("nickname") or "微信用户"),
-        avatar_url=str(profile.get("headimgurl") or ""),
-        raw={"token": {k: v for k, v in token_data.items() if k not in {"access_token", "refresh_token"}}, "profile": profile},
-    )
-    if not user:
-        raise HTTPException(status_code=500, detail="保存微信用户失败")
-    token = secrets.token_urlsafe(32)
-    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=AUTH_SESSION_DAYS)
-    if not storage_db.create_session(
-        user_id=user["id"],
-        session_hash=auth_token_hash(token),
-        expires_at=expires,
-        user_agent=request.headers.get("user-agent", ""),
-        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
-    ):
-        raise HTTPException(status_code=500, detail="创建登录会话失败")
-    res = RedirectResponse(url="/", status_code=302)
-    max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
-    res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
-    res.delete_cookie(AUTH_STATE_COOKIE_NAME, path="/")
     return res
 
 @app.post("/api/auth/logout")
