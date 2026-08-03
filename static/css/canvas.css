@@ -2989,3 +2989,13 @@ body.studio-theme-dark .shell .node.sized.video-node {
 .canvas-gen-run.running .canvas-gen-arrow svg {
     animation:spin 1s linear infinite;
 }
+
+/* 输出框悬停工具栏：鼠标移到节点上渐显，移出后渐隐 */
+.node-output-toolbar { position:absolute; top:8px; right:8px; z-index:32; display:flex; align-items:center; gap:4px; padding:4px; border-radius:999px; background:rgba(255,255,255,.94); border:1px solid rgba(15,23,42,.08); box-shadow:0 10px 26px rgba(15,23,42,.16); opacity:0; pointer-events:none; transform:translateY(-4px); transition:opacity .18s ease, transform .18s ease; }
+.node:hover .node-output-toolbar { opacity:1; pointer-events:auto; transform:translateY(0); }
+.node-output-tool-btn { width:27px; height:27px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; background:transparent; color:#475569; }
+.node-output-tool-btn:hover { background:#eef2f7; color:#111827; }
+.node-output-tool-btn i, .node-output-tool-btn svg { width:14px; height:14px; }
+.theme-dark .node-output-toolbar { background:rgba(30,41,59,.96); border-color:rgba(148,163,184,.22); box-shadow:0 10px 26px rgba(0,0,0,.38); }
+.theme-dark .node-output-tool-btn { color:#cbd5e1; }
+.theme-dark .node-output-tool-btn:hover { background:rgba(51,65,85,.9); color:#f8fafc; }

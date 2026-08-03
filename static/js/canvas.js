@@ -6440,6 +6440,39 @@ function isNodeDragSurface(target){
     // 预览图不再单独拦截拖拽：在图像上按下并拖动应移动整个节点框。
     return !isNodeControl(target) && !isCollapsedGeneratorStageTarget(target) && !target.closest('.port, .resize-handle');
 }
+function nodeOutputMediaUrls(node){
+    const urls = [];
+    for(const item of (node.generatedOutputs || node.images || [])){
+        const url = outputUrlValue(item);
+        if(url) urls.push(url);
+    }
+    if(!urls.length && node.url) urls.push(node.url);
+    return urls;
+}
+function hasNodeOutputMedia(node){
+    return nodeOutputMediaUrls(node).length > 0;
+}
+function nodeOutputToolbarHtml(){
+    return `<div class="node-output-toolbar">
+        <button class="node-output-tool-btn" type="button" data-output-action="zoom" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button>
+        <button class="node-output-tool-btn" type="button" data-output-action="download" title="${escapeHtml(tr('canvas.download'))}"><i data-lucide="download"></i></button>
+    </div>`;
+}
+function bindNodeOutputToolbar(toolbar, node){
+    toolbar.addEventListener('click', e => {
+        const btn = e.target.closest('[data-output-action]');
+        if(!btn || !node) return;
+        e.stopPropagation();
+        const urls = nodeOutputMediaUrls(node);
+        if(!urls.length) return;
+        const url = urls[0];
+        if(btn.dataset.outputAction === 'zoom'){
+            openOutputLightbox(url, node);
+        } else if(btn.dataset.outputAction === 'download'){
+            downloadUrl(url, outputDownloadName(url)).catch(err => alert(err.message || (langIsEn() ? 'Download failed' : '下载失败')));
+        }
+    }, true);
+}
 function renderNode(node){
     normalizeApiNodeLayout(node);
     if(node?.type === 'output') throw new Error('Deprecated output node');
@@ -6626,6 +6659,12 @@ function renderNode(node){
     if(node.type === 'comfy') body.appendChild(renderComfyBody(node));
     if(node.type === 'ltxDirector') body.appendChild(renderLTXDirectorBody(node));
     el.appendChild(body);
+    // 输出框悬停工具栏：鼠标移到节点上渐显“放大 / 下载”按钮。
+    if(CANVAS_MEDIA_OUTPUT_TYPES.includes(node.type) && hasNodeOutputMedia(node)){
+        el.insertAdjacentHTML('beforeend', nodeOutputToolbarHtml());
+        const toolbar = el.querySelector('.node-output-toolbar');
+        if(toolbar) bindNodeOutputToolbar(toolbar, node);
+    }
     el.querySelectorAll('button, select, textarea, input').forEach(control => {
         control.addEventListener('mousedown', e => e.stopPropagation(), true);
         control.addEventListener('click', e => e.stopPropagation());
@@ -6697,11 +6736,8 @@ function bindOutputWrap(wrap, node){
     const recoverQuery = wrap.querySelector('.output-recover-query');
     if(img){
         // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
+        // 点击图片不再直接打开大图；悬停节点时通过工具栏的“放大”按钮查看。
         img.draggable = false;
-        img.onclick = e => {
-            e.stopPropagation();
-            openOutputLightbox(img.dataset.url, node);
-        };
     }
     wrap.addEventListener('click', e => {
         const fallbackVideo = e.target.closest?.('video[data-output-video-fallback]');
