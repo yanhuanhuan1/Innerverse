@@ -10861,7 +10861,7 @@ function canvasVideoOptionBar(node){
     const count = Math.max(1, Math.min(8, Number(node?.count || 1)));
     const modelLabel = canvasComposerShortLabel(node.model || 'Video');
     const durationLabel = `${Number(node.duration || 5)}s`;
-    const aspectLabel = node.aspectRatio || '16:9';
+    const aspectLabel = videoAspectDisplay(node.aspectRatio);
     const resolutionLabel = node.resolution || 'Auto';
     return `
         ${canvasVideoModelPopoverHtml(node)}
@@ -10945,9 +10945,15 @@ function canvasVideoAspectPopoverHtml(node){
     return `<div class="canvas-gen-popover canvas-gen-quality-popover" data-composer-popover="video-aspect" ${canvasComposerPopoverIsOpen(node, 'video-aspect') ? '' : 'hidden'}>
         <div class="canvas-gen-popover-title">${tr('canvas.videoAspect')}</div>
         <div class="canvas-gen-ratio-grid">
-            ${aspects.map(a => `<button type="button" class="${(node.aspectRatio || '16:9') === a ? 'active' : ''}" data-video-aspect="${escapeAttr(a)}">${shapes[a] ? `<span class="ratio-shape ${shapes[a]}"></span>` : ''}<span>${escapeHtml(a)}</span></button>`).join('')}
+            ${aspects.map(a => `<button type="button" class="${(node.aspectRatio || '16:9') === a ? 'active' : ''}" data-video-aspect="${escapeAttr(a)}">${shapes[a] ? `<span class="ratio-shape ${shapes[a]}"></span>` : ''}<span>${escapeHtml(videoAspectDisplay(a))}</span></button>`).join('')}
         </div>
     </div>`;
+}
+function videoAspectDisplay(value){
+    const v = value || '16:9';
+    if(v === 'adaptive') return langIsEn() ? 'Auto' : '自适应';
+    if(v === 'keep_ratio') return langIsEn() ? 'Keep' : '保持';
+    return v;
 }
 function canvasVideoResolutionPopoverHtml(node){
     const resolutions = ['', '480p', '720p', '1080p'];
@@ -11078,7 +11084,7 @@ function syncCanvasComposerOptionBar(node){
     const videoDurationLabel = row?.querySelector('[data-composer-popup="video-duration"] .canvas-gen-token-label');
     if(videoDurationLabel) videoDurationLabel.textContent = `${Number(node.duration || 5)}s`;
     const videoAspectLabel = row?.querySelector('[data-composer-popup="video-aspect"] .canvas-gen-token-label');
-    if(videoAspectLabel) videoAspectLabel.textContent = node.aspectRatio || '16:9';
+    if(videoAspectLabel) videoAspectLabel.textContent = videoAspectDisplay(node.aspectRatio);
     const videoResLabel = row?.querySelector('[data-composer-popup="video-resolution"] .canvas-gen-token-label');
     if(videoResLabel) videoResLabel.textContent = node.resolution || 'Auto';
     const runCost = el.querySelector('.canvas-gen-cost');
