@@ -80,8 +80,6 @@
                     <span>密码</span>
                     <input id="loginPasswordInput" type="password" autocomplete="current-password" minlength="8" maxlength="128" placeholder="至少 8 位密码" required>
                 </label>
-                <button id="verifyEmailCodeBtn" class="auth-submit" type="submit">登录</button>
-                <button id="emailCodeFallbackBtn" class="auth-link-btn" type="button">使用邮箱验证码登录</button>
                 <div id="authCodeFields" class="auth-code-row" hidden>
                     <label>
                         <span>验证码</span>
@@ -89,6 +87,8 @@
                     </label>
                     <button id="sendEmailCodeBtn" type="button">获取验证码</button>
                 </div>
+                <button id="verifyEmailCodeBtn" class="auth-submit" type="submit">登录</button>
+                <button id="emailCodeFallbackBtn" class="auth-link-btn" type="button">使用邮箱验证码登录</button>
                 <div id="emailLoginHint" class="auth-hint"></div>
             </form>
         </div>

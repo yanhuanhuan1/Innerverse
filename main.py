@@ -2932,6 +2932,7 @@ class EmailPasswordRegisterRequest(BaseModel):
     email: str
     password: str
     nickname: str
+    code: str
 
 class EmailPasswordLoginRequest(BaseModel):
     email: str
@@ -16401,17 +16402,20 @@ async def auth_me(request: Request):
 
 @app.post("/api/auth/email/register")
 async def email_password_register(payload: EmailPasswordRegisterRequest, request: Request):
-    if not auth_is_configured():
-        raise HTTPException(status_code=503, detail="Login is not configured")
+    if not email_auth_is_configured():
+        raise HTTPException(status_code=503, detail="Email verification is not configured")
     email = normalize_login_email(payload.email)
     nickname = normalize_nickname(payload.nickname)
     password = validate_login_password(payload.password)
+    code = str(payload.code or "").strip()
     if not email:
         raise HTTPException(status_code=400, detail="Enter a valid email")
     if not nickname:
         raise HTTPException(status_code=400, detail="Enter a username")
     if not password:
         raise HTTPException(status_code=400, detail="Password must be 8-128 characters")
+    if len(code) != 6 or not storage_db.consume_email_login_code(email, auth_code_hash(email, code)):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
     user = storage_db.create_email_password_user(email, nickname, password_hash_value(password))
     if isinstance(user, dict) and user.get("error") == "exists":
         raise HTTPException(status_code=409, detail="This email is already registered")
@@ -16469,23 +16473,11 @@ async def email_login_verify(payload: EmailLoginVerifyRequest, request: Request)
         raise HTTPException(status_code=400, detail="邮箱或验证码格式不正确")
     if not storage_db.consume_email_login_code(email, auth_code_hash(email, code)):
         raise HTTPException(status_code=400, detail="验证码错误或已过期")
-    user = storage_db.upsert_email_user(email)
+    user = storage_db.get_user_by_email(email)
     if not user:
-        raise HTTPException(status_code=500, detail="创建用户失败")
-    token = secrets.token_urlsafe(32)
-    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=AUTH_SESSION_DAYS)
-    if not storage_db.create_session(
-        user_id=user["id"],
-        session_hash=auth_token_hash(token),
-        expires_at=expires,
-        user_agent=request.headers.get("user-agent", ""),
-        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
-    ):
-        raise HTTPException(status_code=500, detail="创建登录会话失败")
-    res = JSONResponse({"ok": True, "user": response_user(user)})
-    max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
-    res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
-    return res
+        raise HTTPException(status_code=404, detail="请先注册账号")
+    storage_db.mark_user_login(user["id"])
+    return create_auth_session_response(user, request)
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):

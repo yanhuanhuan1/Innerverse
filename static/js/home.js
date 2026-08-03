@@ -341,11 +341,12 @@ function setAuthMode(mode, options={}){
     authRegisterTab?.classList.toggle('active', isRegister);
     if(authTitle) authTitle.textContent = isRegister ? L('创建账号','Create account') : L('邮箱登录','Email sign-in');
     if(authDesc) authDesc.textContent = isRegister
-        ? L('填写用户名、邮箱和密码。注册后项目会按账号独立保存。','Choose a username, email, and password. Your projects stay private to this account.')
+        ? L('填写用户名、邮箱、验证码和密码。注册前必须先验证邮箱。','Choose a username, email, code, and password. Email verification is required before creating the account.')
         : (isCode ? L('验证码登录作为备用方式，可能需要等待邮件送达。','Email code sign-in is a fallback and may take a moment to arrive.')
             : L('使用邮箱和密码登录。第一次使用请先注册账号。','Sign in with your email and password. Create an account first if this is your first time.'));
     if(authNameLabel) authNameLabel.hidden = !isRegister;
-    if(authCodeFields) authCodeFields.hidden = !isCode;
+    if(authCodeFields) authCodeFields.hidden = !(isRegister || isCode);
+    if(loginCodeInput) loginCodeInput.required = isRegister || isCode;
     if(loginPasswordInput) {
         loginPasswordInput.closest('label').hidden = isCode;
         loginPasswordInput.required = !isCode;
@@ -453,6 +454,7 @@ async function submitEmailPasswordAuth(){
     const email = (loginEmailInput?.value || '').trim();
     const password = (loginPasswordInput?.value || '');
     const nickname = (loginNameInput?.value || '').trim();
+    const code = (loginCodeInput?.value || '').trim();
     if(!email) {
         setEmailLoginHint(L('请输入邮箱','Enter your email'), true);
         loginEmailInput?.focus();
@@ -468,8 +470,13 @@ async function submitEmailPasswordAuth(){
         loginPasswordInput?.focus();
         return;
     }
+    if(authMode === 'register' && code.length < 6) {
+        setEmailLoginHint(L('请先获取并输入 6 位邮箱验证码','Send and enter the 6-digit email code first'), true);
+        loginCodeInput?.focus();
+        return;
+    }
     const endpoint = authMode === 'register' ? '/api/auth/email/register' : '/api/auth/email/login';
-    const body = authMode === 'register' ? {email, password, nickname} : {email, password};
+    const body = authMode === 'register' ? {email, password, nickname, code} : {email, password};
     try {
         verifyEmailCodeBtn.disabled = true;
         setEmailLoginHint(authMode === 'register' ? L('正在创建账号……','Creating account...') : L('正在登录……','Signing in...'));
