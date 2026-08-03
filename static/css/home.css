@@ -12,6 +12,8 @@ button { border:0; cursor:pointer; }
 .theme-dark .home-pill-btn,.theme-dark .home-icon-btn { background:rgba(17,24,39,.72); }
 .home-pill-btn { padding:0 12px; font-size:12px; font-weight:750; }
 .home-icon-btn { width:32px; }
+/* display:inline-flex 会覆盖 hidden 属性的默认 display:none，登录后必须真正隐藏登录按钮。 */
+.home-pill-btn[hidden],.home-icon-btn[hidden] { display:none; }
 .home-user-box { height:34px; padding:3px 5px 3px 7px; border:1px solid rgba(36,35,33,.08); border-radius:999px; background:rgba(255,255,255,.64); color:var(--text); display:inline-flex; align-items:center; gap:7px; box-shadow:0 8px 22px var(--shadow); backdrop-filter:blur(14px); font-size:12px; font-weight:800; }
 .theme-dark .home-user-box { background:rgba(17,24,39,.72); }
 .home-user-box[hidden] { display:none; }
