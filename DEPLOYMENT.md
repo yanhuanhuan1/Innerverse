@@ -142,10 +142,12 @@ the site. Two things help:
 1. Use a **pooled connection string**. In Neon, copy the "Pooled connection"
    (pgBouncer, `-pooler` host) string into `DATABASE_URL` instead of the direct
    one. Pooled connections survive cold starts much better.
-2. This project ships a **keep-warm cron** (`vercel.json` -> `crons`) that calls
-   `/api/health` every 5 minutes. The health endpoint pings the database
-   (`SELECT 1`) when `DATABASE_URL` is set, which keeps the compute awake.
-   If you still see cold starts, tighten the schedule to every 4 minutes.
+2. `/api/health` pings the database (`SELECT 1`) when `DATABASE_URL` is set,
+   so you can point an external uptime/warm-up monitor at it. A Vercel Cron
+   every few minutes would keep the compute awake too, but the Hobby plan only
+   allows one cron run per day — so either upgrade to Pro and add a cron, or
+   use a third-party uptime service (e.g. UptimeRobot) hitting `/api/health`
+   every 5 minutes.
 
-Note: `vercel.json` crons require the plan to support scheduled invocations;
-on plans that do not, the site still works — you just lose the keep-warm.
+Note: keep `vercel.json` free of `crons` on Hobby — an unsupported cron
+expression makes Vercel reject every deployment before the build starts.
