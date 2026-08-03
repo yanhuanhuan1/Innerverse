@@ -6452,26 +6452,64 @@ function nodeOutputMediaUrls(node){
 function hasNodeOutputMedia(node){
     return nodeOutputMediaUrls(node).length > 0;
 }
-function nodeOutputToolbarHtml(){
-    return `<div class="node-output-toolbar">
-        <button class="node-output-tool-btn" type="button" data-output-action="zoom" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button>
-        <button class="node-output-tool-btn" type="button" data-output-action="download" title="${escapeHtml(tr('canvas.download'))}"><i data-lucide="download"></i></button>
+function nodeOutputPanelHtml(open){
+    return `<div class="node-output-panel ${open ? 'is-open' : ''}">
+        <div class="node-output-panel-bar">
+            <button class="node-output-panel-btn" type="button" data-output-action="zoom" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button>
+            <button class="node-output-panel-btn" type="button" data-output-action="download" title="${escapeHtml(tr('canvas.download'))}"><i data-lucide="download"></i></button>
+            <span class="node-output-panel-spacer"></span>
+            <span class="node-output-panel-res" data-output-res>--</span>
+            <button class="node-output-panel-btn" type="button" data-output-action="close" title="${escapeHtml(tr('common.close'))}"><i data-lucide="x"></i></button>
+        </div>
+        <div class="node-output-panel-body"></div>
     </div>`;
 }
-function bindNodeOutputToolbar(toolbar, node){
-    toolbar.addEventListener('click', e => {
+function bindNodeOutputPanel(panel, node){
+    const body = panel.querySelector('.node-output-panel-body');
+    const resEl = panel.querySelector('[data-output-res]');
+    const urls = nodeOutputMediaUrls(node);
+    if(body && urls.length){
+        const img = document.createElement('img');
+        img.className = 'node-output-panel-img';
+        img.alt = '';
+        img.draggable = false;
+        img.src = canvasDisplayMediaUrl(urls[0]);
+        img.onload = () => {
+            if(resEl && img.naturalWidth && img.naturalHeight) resEl.textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
+        };
+        body.appendChild(img);
+    }
+    panel.addEventListener('click', e => {
         const btn = e.target.closest('[data-output-action]');
-        if(!btn || !node) return;
+        if(!btn) return;
         e.stopPropagation();
-        const urls = nodeOutputMediaUrls(node);
-        if(!urls.length) return;
-        const url = urls[0];
-        if(btn.dataset.outputAction === 'zoom'){
-            openOutputLightbox(url, node);
+        const action = btn.dataset.outputAction;
+        if(action === 'zoom'){
+            if(urls.length) openOutputLightbox(urls[0], node);
         } else if(btn.dataset.outputAction === 'download'){
-            downloadUrl(url, outputDownloadName(url)).catch(err => alert(err.message || (langIsEn() ? 'Download failed' : '下载失败')));
+            if(urls.length) downloadUrl(urls[0], outputDownloadName(urls[0])).catch(err => alert(err.message || (langIsEn() ? 'Download failed' : '下载失败')));
+        } else if(action === 'close'){
+            outputPanelNodeId = '';
+            refreshNodes([node.id]);
         }
     }, true);
+}
+// 输出框：点击生成图时在节点下方弹出输出面板（与输入框 composer 同一交互模式）。
+let outputPanelNodeId = '';
+function toggleNodeOutputPanel(node){
+    if(!node) return;
+    if(outputPanelNodeId === node.id){
+        outputPanelNodeId = '';
+        refreshNodes([node.id]);
+        return;
+    }
+    if(outputPanelNodeId) outputPanelNodeId = '';
+    outputPanelNodeId = node.id;
+    selected.clear();
+    selected.add(node.id);
+    refreshSelectionVisuals();
+    refreshNodes([node.id]);
+    scheduleSave();
 }
 function renderNode(node){
     normalizeApiNodeLayout(node);
@@ -6659,11 +6697,15 @@ function renderNode(node){
     if(node.type === 'comfy') body.appendChild(renderComfyBody(node));
     if(node.type === 'ltxDirector') body.appendChild(renderLTXDirectorBody(node));
     el.appendChild(body);
-    // 输出框悬停工具栏：鼠标移到节点上渐显“放大 / 下载”按钮。
+    // 输出框：点击生成图时在节点下方弹出输出面板（放大 / 下载 / 分辨率 / 关闭）。
     if(CANVAS_MEDIA_OUTPUT_TYPES.includes(node.type) && hasNodeOutputMedia(node)){
-        el.insertAdjacentHTML('beforeend', nodeOutputToolbarHtml());
-        const toolbar = el.querySelector('.node-output-toolbar');
-        if(toolbar) bindNodeOutputToolbar(toolbar, node);
+        const panelOpen = outputPanelNodeId === node.id;
+        el.insertAdjacentHTML('beforeend', nodeOutputPanelHtml(panelOpen));
+        if(panelOpen){
+            const panel = el.querySelector('.node-output-panel');
+            if(panel) bindNodeOutputPanel(panel, node);
+        }
+        el.classList.toggle('output-panel-open', panelOpen);
     }
     el.querySelectorAll('button, select, textarea, input').forEach(control => {
         control.addEventListener('mousedown', e => e.stopPropagation(), true);
@@ -6736,8 +6778,12 @@ function bindOutputWrap(wrap, node){
     const recoverQuery = wrap.querySelector('.output-recover-query');
     if(img){
         // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
-        // 点击图片不再直接打开大图；悬停节点时通过工具栏的“放大”按钮查看。
+        // 点击生成图：弹出节点下方的输出面板（放大 / 下载等），不再直接打开大图。
         img.draggable = false;
+        img.onclick = e => {
+            e.stopPropagation();
+            toggleNodeOutputPanel(node);
+        };
     }
     wrap.addEventListener('click', e => {
         const fallbackVideo = e.target.closest?.('video[data-output-video-fallback]');
