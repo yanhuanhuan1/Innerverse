@@ -31,6 +31,26 @@ def is_configured() -> bool:
     return bool(_DATABASE_URL)
 
 
+def ping() -> bool:
+    """Cheap liveness check that also establishes/warms the Postgres connection.
+
+    Used by /api/health so a scheduled cron can keep serverless databases
+    (e.g. Neon) awake and avoid multi-second cold starts on first real request.
+    """
+    if not is_configured():
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn:
+            return False
+        try:
+            conn.execute("SELECT 1")
+            return True
+        except Exception as exc:
+            logger.info(f"[storage_db] ping failed: {exc}")
+            return False
+
+
 def _connect():
     global _conn, _init_error
     if _conn is not None:
@@ -48,7 +68,7 @@ def _connect():
         return None
     try:
         import psycopg
-        _conn = psycopg.connect(_DATABASE_URL, autocommit=True)
+        _conn = psycopg.connect(_DATABASE_URL, autocommit=True, connect_timeout=10)
         return _conn
     except Exception as exc:
         _init_error = exc

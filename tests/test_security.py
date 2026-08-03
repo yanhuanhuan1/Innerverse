@@ -99,6 +99,12 @@ class StorageModuleLoggingTests(unittest.TestCase):
         self.assertTrue(hasattr(storage_db, "logger"))
         self.assertTrue(hasattr(storage_r2, "logger"))
 
+    def test_ping_returns_false_when_not_configured(self):
+        import storage_db
+
+        # Test environments have no DATABASE_URL, so ping must no-op quickly.
+        self.assertFalse(storage_db.ping())
+
 
 if __name__ == "__main__":
     unittest.main()

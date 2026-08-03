@@ -131,3 +131,21 @@ server.pid
 Vercel Functions have an ephemeral filesystem. Runtime canvas data and uploaded files may be lost between deployments or cold starts.
 
 Vercel Functions 的文件系统是临时的。生产环境如需长期保存画布、素材和生成记录，下一阶段建议接入对象存储和数据库，例如 Vercel Blob、S3-compatible storage、Postgres 或 Redis。
+
+## Keeping the Database Warm
+
+If your Postgres provider pauses idle compute (Neon free tier pauses after ~5
+minutes of inactivity), the first request after idle can take 5-10 seconds to
+reconnect — this usually shows up as the home page loading slowly when you open
+the site. Two things help:
+
+1. Use a **pooled connection string**. In Neon, copy the "Pooled connection"
+   (pgBouncer, `-pooler` host) string into `DATABASE_URL` instead of the direct
+   one. Pooled connections survive cold starts much better.
+2. This project ships a **keep-warm cron** (`vercel.json` -> `crons`) that calls
+   `/api/health` every 5 minutes. The health endpoint pings the database
+   (`SELECT 1`) when `DATABASE_URL` is set, which keeps the compute awake.
+   If you still see cold starts, tighten the schedule to every 4 minutes.
+
+Note: `vercel.json` crons require the plan to support scheduled invocations;
+on plans that do not, the site still works — you just lose the keep-warm.

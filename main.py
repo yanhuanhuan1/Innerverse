@@ -13397,11 +13397,17 @@ async def api_providers():
 
 @app.get("/api/health")
 async def api_health():
+    db_configured = storage_db.is_configured()
+    db_ok = False
+    if db_configured:
+        db_ok = await asyncio.to_thread(storage_db.ping)
     return {
         "ok": True,
         "runtime": "vercel" if IS_VERCEL else "serverless" if SERVERLESS_RUNTIME else "local",
         "apimart_configured": bool(provider_env_key_value("apimart")),
         "apimart_base_url": APIMART_DEFAULT_BASE_URL,
+        "db_configured": db_configured,
+        "db_ok": db_ok,
     }
 
 @app.put("/api/providers")
