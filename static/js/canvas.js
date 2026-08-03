@@ -6698,6 +6698,13 @@ function bindOutputWrap(wrap, node){
     const playBtn = wrap.querySelector('.canvas-video-play');
     const del = wrap.querySelector('.output-del');
     const recoverQuery = wrap.querySelector('.output-recover-query');
+    const zoomBtn = wrap.querySelector('.output-zoom');
+    if(zoomBtn){
+        zoomBtn.onclick = e => {
+            e.stopPropagation();
+            openOutputLightbox(wrap.dataset.outputUrl, node);
+        };
+    }
     if(img){
         // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
         // 点击生成图不再单独处理：与点击节点其它区域一致（冒泡到节点/舞台的点击逻辑）。
@@ -13946,7 +13953,7 @@ function renderOutputMedia(item, useGridLayout=false){
         const label = kind === 'text' ? 'TEXT' : 'FILE';
         return `<div class="output-img-wrap output-file-wrap" data-output-url="${safe}"${gridStyle}><div class="output-file-card"><i data-lucide="${icon}" class="w-7 h-7"></i><span>${escapeHtml(meta.name || outputImageName(url))}</span><small>${label}</small></div>${timePill}<button class="output-del" title="${tr('common.delete')}">×</button></div>`;
     }
-    return `<div class="output-img-wrap" data-output-url="${safe}"${gridStyle}>${canvasPreviewImgHtml(url, useGridLayout ? 512 : 768, 'alt="generated output"')}${timePill}<button class="output-del" title="${tr('common.delete')}">×</button></div>`;
+    return `<div class="output-img-wrap" data-output-url="${safe}"${gridStyle}>${canvasPreviewImgHtml(url, useGridLayout ? 512 : 768, 'alt="generated output"')}${timePill}<button class="output-zoom" type="button" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button><button class="output-del" title="${tr('common.delete')}">×</button></div>`;
 }
 function outputGridLayout(node){
     const images = node?.images || [];
@@ -15459,15 +15466,18 @@ function sanitizeConnections(){
 function endDrag(event=null){
     const hadContentDrag = Boolean(dragNode || resizeNode || llmPaneDrag || knifeChanged || tempLink);
     const hadViewportDrag = Boolean(dragBoard || minimapDrag);
-    const draggedNode = Boolean(dragNode);
+    let dragActuallyMoved = false;
     if(dragNode){
         const moved = [dragNode.node, ...(dragNode.children || []).map(c => c.node)].filter(Boolean);
+        dragActuallyMoved = Math.abs(Number(dragNode.node.x || 0) - Number(dragNode.ox || 0)) > 0.5
+            || Math.abs(Number(dragNode.node.y || 0) - Number(dragNode.oy || 0)) > 0.5;
         // 拖动 group/promptGroup 自身时不重新评估（成员跟着一起走，包含关系不变）
         const draggedGroup = moved.some(n => n.type === 'group' || n.type === 'promptGroup');
         if(!draggedGroup) updateGroupMembership(moved);
     }
-    // 拖完节点后抑制紧随其后的“幽灵点击”，避免误触发舞台点击（例如生成图拖动后弹出面板）。
-    if(hadContentDrag && draggedNode){
+    // 只有节点真正移动过，才抑制紧随其后的“幽灵点击”，避免误触发舞台点击（例如生成图拖动后弹出面板）；
+    // 普通点击（未移动）不会被吞掉，仍会正常弹出输入框。
+    if(hadContentDrag && dragActuallyMoved){
         suppressNextNodeClick = true;
         setTimeout(() => { suppressNextNodeClick = false; }, 0);
     }
