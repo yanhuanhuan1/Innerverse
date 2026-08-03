@@ -1,11 +1,7 @@
 {
-  "version": "2026.08.03",
-  "updated_at": "2026-08-03T16:30:00+08:00",
+  "version": "2026.07.23",
+  "updated_at": "2026-07-23T21:50:36+08:00",
   "items": [
-    {
-      "type": "feature",
-      "text": "画布合并：smart-canvas 成为唯一画布引擎，经典画布数据自动迁移打开，新建画布默认智能画布"
-    },
     {
       "type": "feature",
       "text": "修复即梦CLI报错，新增5.0pro和SD2.0 mini协议，新增图片2k/4k/8k放大选项"

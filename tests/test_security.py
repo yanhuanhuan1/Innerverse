@@ -88,7 +88,7 @@ class VersionTests(unittest.TestCase):
 
     def test_load_app_version_fallback(self):
         with patch.object(main.os.path, "join", return_value="/nonexistent/VERSION"):
-            self.assertEqual(main.load_app_version(), "2026.08.03")
+            self.assertEqual(main.load_app_version(), "2026.07.23")
 
 
 class StorageModuleLoggingTests(unittest.TestCase):

@@ -127,7 +127,7 @@ function createLocalCanvas({title, projectId, mode}={}){
         id: localId('canvas'),
         title: title || L('新画布','New canvas'),
         icon: mode === 'text' ? 'sparkles' : 'layers',
-        kind: 'smart',
+        kind: 'classic',
         project: projectId || 'default',
         created_at: now,
         updated_at: now,
@@ -552,8 +552,9 @@ function canvasUrl(canvas, opts={}){
     });
     if(opts.prompt) params.set('initial_prompt', opts.prompt);
     if(opts.mode) params.set('initial_mode', opts.mode);
-    // 自 2026.08 起 smart-canvas 是唯一画布引擎，所有画布（含经典画布）统一打开智能画布。
-    return `/static/smart-canvas.html?${params.toString()}`;
+    return canvas.kind === 'smart'
+        ? `/static/smart-canvas.html?${params.toString()}`
+        : `/static/canvas.html?${params.toString()}`;
 }
 
 function openCanvas(canvas){
@@ -566,7 +567,7 @@ async function createCanvasInProject({title, projectId, prompt='', mode=currentM
     const payload = {
         title: title || L('新画布','New canvas'),
         icon: mode === 'text' ? 'sparkles' : 'layers',
-        kind:'smart',
+        kind:'classic',
         project: projectId || 'default',
         board_x:0,
         board_y:0

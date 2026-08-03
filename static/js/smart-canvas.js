@@ -1070,106 +1070,6 @@ function normalizeLegacySmartNode(node){
     if(node.type === 'smart-image' && node.historyFor) node.isHistoryGroup = true;
     return node;
 }
-
-// ---- 经典画布（kind=classic）兼容层 ----
-// 自 2026.08 起 smart-canvas 成为唯一画布引擎，经典画布在打开时按此规则
-// 在内存中迁移为智能画布节点；节点其余字段全部保留，避免任何数据丢失。
-const CLASSIC_NODE_TYPE_LABELS = {
-    'online': '在线生成', 'image': '图片', 'prompt': '文本', 'output': '结果',
-    'group': '分组', 'loop': '循环', 'comfy': 'ComfyUI', 'llm': 'LLM',
-    'video': '视频', 'rh': 'RunningHub', 'ltxDirector': 'LTX 导演',
-    'msgen': 'MS 生成', 'upload': '上传', 'note': '备注', 'audio': '音频', 'text': '文本',
-};
-const CLASSIC_LEGACY_TYPES = new Set(['comfy', 'llm', 'video', 'rh', 'ltxDirector', 'msgen', 'upload', 'note', 'audio', 'text']);
-
-function classicNodeUrlValue(item){
-    if(typeof item === 'string') return String(item).trim();
-    if(item && typeof item === 'object'){
-        for(const key of ['url', 'src', 'uri', 'output_url', 'outputUrl', 'video', 'video_url', 'videoUrl']){
-            const value = String(item[key] || '').trim();
-            if(value) return value;
-        }
-    }
-    return '';
-}
-
-function migrateClassicCanvasNode(node){
-    if(!node || typeof node !== 'object') return node;
-    const type = String(node.type || '');
-    if(type === 'image' || type === 'output' || type === 'online'){
-        let rawImages = (Array.isArray(node.images) && node.images.length)
-            ? node.images
-            : (Array.isArray(node.generatedOutputs) ? node.generatedOutputs : []);
-        if(!rawImages.length && classicNodeUrlValue(node.url || node.src || node.video)){
-            rawImages = [{
-                url: node.url || node.src || node.video,
-                name: node.name || '',
-                natural_w: node.natural_w,
-                natural_h: node.natural_h,
-            }];
-        }
-        const images = rawImages.map(item => {
-            const url = classicNodeUrlValue(item);
-            if(!url) return null;
-            const meta = {...node, ...(typeof item === 'object' && item ? item : {})};
-            return stripImageGenerationMeta({
-                url,
-                name: meta.name || meta.title || smartImageNameFromUrl(url),
-                kind: mediaKindForItem({url}),
-                natural_w: Number(meta.natural_w || meta.width || 0) || 0,
-                natural_h: Number(meta.natural_h || meta.height || 0) || 0,
-            });
-        }).filter(Boolean);
-        const migrated = {
-            ...node,
-            type: 'smart-image',
-            images,
-            promptDraftText: String(node.promptDraftText || node.prompt || node.text || '').trim(),
-        };
-        delete migrated.generatedOutputs;
-        return migrated;
-    }
-    if(type === 'prompt'){
-        return {...node, type: 'smart-prompt', draftText: String(node.draftText || node.text || node.prompt || '').trim()};
-    }
-    if(type === 'group'){
-        return {...node, type: 'smart-group', items: Array.isArray(node.items) ? node.items : []};
-    }
-    if(type === 'loop'){
-        return {...node, type: 'smart-loop', draftText: String(node.draftText || node.prompt || '').trim()};
-    }
-    return node;
-}
-
-function migrateClassicCanvas(canvas){
-    if(!canvas || canvas.kind !== 'classic') return canvas;
-    canvas.nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : [])
-        .map(migrateClassicCanvasNode)
-        .filter(Boolean);
-    if(!Array.isArray(canvas.connections)) canvas.connections = [];
-    return canvas;
-}
-
-function legacyNodeSummaryHtml(node){
-    const parts = [];
-    const text = String(node.prompt || node.text || node.draftText || node.workflow || node.comfyWorkflow || node.note || '').trim();
-    if(text) parts.push(`<div class="legacy-node-text">${escapeHtml(text.slice(0, 260))}</div>`);
-    const imgs = (node.images || []).map(imageForDisplay);
-    if(imgs.length){
-        const thumbs = imgs.slice(0, 4).map(img => `<img class="legacy-node-thumb" src="${escapeAttr(smartMediaPreviewUrl(img, 256))}" alt="">`).join('');
-        parts.push(`<div class="legacy-node-thumbs">${thumbs}</div>`);
-    }
-    return parts.join('') || '<div class="legacy-node-empty">原内容已保留，可在新画布中继续创作</div>';
-}
-
-function legacyNodeBodyHtml(node, layout){
-    const label = CLASSIC_NODE_TYPE_LABELS[node.type] || node.type || '节点';
-    return `<div class="legacy-node-body" style="width:${Math.max(200, Math.round(Number(layout.width) || 260))}px;min-height:${Math.max(84, Math.round(Number(layout.height) || 120))}px">
-        <div class="legacy-node-badge">${escapeHtml(label)}</div>
-        ${legacyNodeSummaryHtml(node)}
-    </div>`;
-}
-
 function validOutpaintSize(node){
     const w = Math.round(Number(node?.outpaintSize?.width || 0));
     const h = Math.round(Number(node?.outpaintSize?.height || 0));
@@ -6037,7 +5937,6 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
-        migrateClassicCanvas(canvas);
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
@@ -7502,7 +7401,6 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
-    if(CLASSIC_LEGACY_TYPES.has(node.type)) return legacyNodeBodyHtml(node, layout);
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
@@ -7825,8 +7723,7 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const legacyLabel = CLASSIC_NODE_TYPE_LABELS[node.type];
-        const title = legacyLabel ? legacyLabel : (node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode'))));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
