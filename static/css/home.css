@@ -63,6 +63,9 @@ button { border:0; cursor:pointer; }
 .auth-modal[hidden] { display:none; }
 .auth-modal { position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:24px; }
 .auth-modal-backdrop { position:absolute; inset:0; background:rgba(12,17,27,.36); backdrop-filter:blur(10px); }
+/* 卡片内所有带 hidden 属性的元素（用户名/验证码行/密码 label）必须真正隐藏：
+   .auth-card label 和 .auth-code-row 显式设置了 display，会覆盖 hidden 的默认 display:none。 */
+.auth-card [hidden] { display:none !important; }
 .auth-card { position:relative; z-index:1; width:min(420px, 100%); padding:28px; border:1px solid var(--line); border-radius:20px; background:var(--card); color:var(--text); box-shadow:0 24px 70px rgba(0,0,0,.18); }
 .auth-card h3 { margin:0; font-size:24px; font-weight:900; letter-spacing:0; }
 .auth-card p { margin:9px 0 22px; color:var(--muted); font-size:13px; line-height:1.6; }

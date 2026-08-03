@@ -346,6 +346,9 @@ function setAuthMode(mode, options={}){
             : L('使用邮箱和密码登录。第一次使用请先注册账号。','Sign in with your email and password. Create an account first if this is your first time.'));
     if(authNameLabel) authNameLabel.hidden = !isRegister;
     if(authCodeFields) authCodeFields.hidden = !(isRegister || isCode);
+    // 切换模式时清掉残留值，避免密码登录带上一份无意义的旧验证码/用户名。
+    if(!isCode && !isRegister && loginCodeInput) loginCodeInput.value = '';
+    if(!isRegister && loginNameInput) loginNameInput.value = '';
     if(loginCodeInput) loginCodeInput.required = isRegister || isCode;
     if(loginPasswordInput) {
         loginPasswordInput.closest('label').hidden = isCode;
