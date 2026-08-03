@@ -15301,13 +15301,19 @@ function startNodeDrag(e, node){
         [...selected].forEach(id => collect(nodes.find(n => n.id === id)));
     }
     const children = [...collected.values()];
-    dragNode = {node: dragTarget, children, sx:e.clientX, sy:e.clientY, ox:dragTarget.x, oy:dragTarget.y};
+    dragNode = {node: dragTarget, children, sx:e.clientX, sy:e.clientY, ox:dragTarget.x, oy:dragTarget.y, moved:false};
     document.body.classList.add('canvas-node-drag');
     window.onmousemove = onNodeDrag;
     window.onmouseup = endDrag;
 }
 function onNodeDrag(e){
     if(!dragNode) return;
+    // 与舞台拖动一致的 3px 判定：只有真正移动超过 3 像素才算拖拽，
+    // 避免普通点击的微小抖动被当作拖拽，吞掉随后的 click（导致输入框弹不出）。
+    if(!dragNode.moved && Math.hypot(e.clientX - dragNode.sx, e.clientY - dragNode.sy) > 3){
+        dragNode.moved = true;
+    }
+    if(!dragNode.moved) return;
     const dx = (e.clientX - dragNode.sx) / viewport.scale;
     const dy = (e.clientY - dragNode.sy) / viewport.scale;
     dragNode.node.x = dragNode.ox + dx;
@@ -15466,11 +15472,9 @@ function sanitizeConnections(){
 function endDrag(event=null){
     const hadContentDrag = Boolean(dragNode || resizeNode || llmPaneDrag || knifeChanged || tempLink);
     const hadViewportDrag = Boolean(dragBoard || minimapDrag);
-    let dragActuallyMoved = false;
+    const dragActuallyMoved = Boolean(dragNode?.moved);
     if(dragNode){
         const moved = [dragNode.node, ...(dragNode.children || []).map(c => c.node)].filter(Boolean);
-        dragActuallyMoved = Math.abs(Number(dragNode.node.x || 0) - Number(dragNode.ox || 0)) > 0.5
-            || Math.abs(Number(dragNode.node.y || 0) - Number(dragNode.oy || 0)) > 0.5;
         // 拖动 group/promptGroup 自身时不重新评估（成员跟着一起走，包含关系不变）
         const draggedGroup = moved.some(n => n.type === 'group' || n.type === 'promptGroup');
         if(!draggedGroup) updateGroupMembership(moved);
