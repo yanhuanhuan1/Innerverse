@@ -42,6 +42,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import storage_r2
 import storage_db
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("innerverse")
+
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
     "/api/canvases",
@@ -71,9 +74,18 @@ logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 
 app = FastAPI()
 
+def parse_allowed_origins(value: str = ""):
+    """Parse a comma-separated CORS origin list; fall back to local dev origins."""
+    origins = [item.strip().rstrip("/") for item in str(value or "").split(",") if item.strip()]
+    if origins:
+        return origins
+    return ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+ALLOWED_ORIGINS = parse_allowed_origins(os.getenv("ALLOWED_ORIGINS", ""))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -91,7 +103,7 @@ class ConnectionManager:
         self.connection_clients[websocket] = client_id or f"anon-{id(websocket)}"
         if client_id:
             self.user_connections[client_id] = websocket
-        print(f"WS Connected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
+        logger.info(f"WS Connected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
         await self.broadcast_count()
 
     async def disconnect(self, websocket: WebSocket, client_id: str = None):
@@ -100,7 +112,7 @@ class ConnectionManager:
         self.connection_clients.pop(websocket, None)
         if client_id and self.user_connections.get(client_id) is websocket:
             del self.user_connections[client_id]
-        print(f"WS Disconnected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
+        logger.info(f"WS Disconnected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
         await self.broadcast_count()
 
     def online_count(self):
@@ -117,7 +129,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(data)
             except Exception as e:
-                print(f"Broadcast error: {e}")
+                logger.info(f"Broadcast error: {e}")
                 self.active_connections.remove(connection)
 
     async def broadcast_new_image(self, image_data: dict):
@@ -126,7 +138,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(data)
             except Exception as e:
-                print(f"Broadcast image error: {e}")
+                logger.info(f"Broadcast image error: {e}")
                 self.active_connections.remove(connection)
 
     async def broadcast_canvas_updated(self, canvas_id: str, updated_at: int, client_id: str = ""):
@@ -140,7 +152,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(data)
             except Exception as e:
-                print(f"Broadcast canvas error: {e}")
+                logger.info(f"Broadcast canvas error: {e}")
                 self.active_connections.remove(connection)
 
     async def broadcast_asset_library_updated(self, updated_at: int = 0):
@@ -152,7 +164,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(data)
             except Exception as e:
-                print(f"Broadcast asset library error: {e}")
+                logger.info(f"Broadcast asset library error: {e}")
                 self.active_connections.remove(connection)
 
     async def send_personal_message(self, message: dict, client_id: str):
@@ -161,11 +173,24 @@ class ConnectionManager:
             try:
                 await ws.send_text(json.dumps(message))
             except Exception as e:
-                print(f"Personal message error for {client_id}: {e}")
+                logger.info(f"Personal message error for {client_id}: {e}")
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
-APP_VERSION = "2026.06.03"
+
+def load_app_version():
+    """Single source of truth: read the version from the VERSION file."""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(root, "VERSION"), "r", encoding="utf-8") as f:
+            version = (f.read().strip().splitlines() or [""])[0].strip()
+        if version:
+            return version
+    except Exception:
+        pass
+    return "2026.07.23"
+
+APP_VERSION = load_app_version()
 GITHUB_REPO_URL = "https://github.com/yanhuanhuan1/Innerverse"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/yanhuanhuan1/Innerverse/main/VERSION"
 GITHUB_TREE_URL = "https://api.github.com/repos/yanhuanhuan1/Innerverse/git/trees/main?recursive=1"
@@ -189,17 +214,17 @@ async def startup_event():
     try:
         await asyncio.to_thread(migrate_asset_library_into_dirs)
     except Exception as exc:
-        print(f"资产库分组整理失败: {exc}")
+        logger.info(f"资产库分组整理失败: {exc}")
     # 修复历史遗留的双重扩展名素材（foo.png.png → foo.png），否则这些卡片无法显示
     try:
         await asyncio.to_thread(migrate_double_extension_uploads)
     except Exception as exc:
-        print(f"修复双重扩展名素材失败: {exc}")
+        logger.info(f"修复双重扩展名素材失败: {exc}")
     # 纠正内容与扩展名不符的图片（如 WebP 内容却叫 .png），否则严格客户端解不出来
     try:
         await asyncio.to_thread(migrate_mislabeled_image_extensions)
     except Exception as exc:
-        print(f"纠正图片扩展名失败: {exc}")
+        logger.info(f"纠正图片扩展名失败: {exc}")
 
 @app.websocket("/ws/stats")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
@@ -212,7 +237,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
     except WebSocketDisconnect:
         await manager.disconnect(websocket, client_id)
     except Exception as e:
-        print(f"WS Error: {e}")
+        logger.info(f"WS Error: {e}")
         await manager.disconnect(websocket, client_id)
 
 # --- 配置区域 ---
@@ -344,6 +369,47 @@ def validate_login_password(password: str):
         return ""
     return value
 
+# --- 进程内登录限流 ---
+# 简单滑动窗口。单实例部署足够；生产多实例时建议换成 Redis 等共享存储。
+AUTH_RATE_LIMITS = {
+    "register": (10, 3600),      # 注册：每小时最多 10 次（按邮箱 + IP）
+    "password_login": (10, 300), # 密码登录：5 分钟最多 10 次
+    "email_start": (6, 300),     # 获取验证码：5 分钟最多 6 次
+    "email_verify": (10, 300),   # 验证码登录：5 分钟最多 10 次
+}
+_rate_buckets: Dict[str, List[float]] = {}
+_rate_lock = Lock()
+
+def request_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return str(forwarded).split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
+
+def auth_rate_limit_key(request: Request, scope: str, email: str = "") -> str:
+    return f"{scope}:{request_client_ip(request)}:{str(email or '').strip().lower()}"
+
+def auth_rate_limit_allowed(request: Request, scope: str, email: str = "") -> bool:
+    limit, window = AUTH_RATE_LIMITS.get(scope, (10, 300))
+    key = auth_rate_limit_key(request, scope, email)
+    now = time.time()
+    with _rate_lock:
+        bucket = _rate_buckets.setdefault(key, [])
+        while bucket and bucket[0] <= now - window:
+            bucket.pop(0)
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now)
+        if len(_rate_buckets) > 20000:
+            stale = [k for k, v in _rate_buckets.items() if not v or v[-1] <= now - 3600]
+            for k in stale:
+                _rate_buckets.pop(k, None)
+    return True
+
+def ensure_auth_rate_limit(request: Request, scope: str, email: str = ""):
+    if not auth_rate_limit_allowed(request, scope, email):
+        raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
+
 def session_user_from_request(request: Request):
     token = request.cookies.get(AUTH_COOKIE_NAME, "")
     if not token:
@@ -407,7 +473,7 @@ def load_storage_settings():
             with open(STORAGE_SETTINGS_FILE, "r", encoding="utf-8-sig") as f:
                 raw = json.load(f) if f else {}
     except Exception as exc:
-        print(f"加载存储目录设置失败: {exc}")
+        logger.info(f"加载存储目录设置失败: {exc}")
         raw = {}
     dirs = {}
     for key, fallback in DEFAULT_STORAGE_DIRS.items():
@@ -734,7 +800,7 @@ def ensure_runtime_config_files():
             with open(API_ENV_FILE, "a", encoding="utf-8"):
                 pass
     except Exception as e:
-        print(f"初始化 API 配置目录失败: {e}")
+        logger.info(f"初始化 API 配置目录失败: {e}")
 
 def load_env_file():
     if not os.path.exists(API_ENV_FILE):
@@ -750,7 +816,7 @@ def load_env_file():
                 value = value.strip().strip('"').strip("'")
                 os.environ.setdefault(key, value)
     except Exception as e:
-        print(f"加载 API/.env 失败: {e}")
+        logger.info(f"加载 API/.env 失败: {e}")
 ensure_runtime_config_files()
 load_env_file()
 
@@ -1276,7 +1342,7 @@ def load_static_runninghub_provider():
                 provider["rh_workflows"] = apply_runninghub_system_thumbnails(provider.get("rh_workflows") or [], "workflow")
                 return provider
     except Exception as e:
-        print(f"加载 static RunningHub 配置失败: {e}")
+        logger.info(f"加载 static RunningHub 配置失败: {e}")
     return None
 
 def merge_runninghub_provider_with_static(provider):
@@ -1438,7 +1504,7 @@ def load_api_providers():
         providers = [normalize_provider(item) for item in raw if isinstance(item, dict)]
         return merge_default_api_providers(providers or defaults, inject_missing=not bool(providers))
     except Exception as e:
-        print(f"加载 API 平台配置失败: {e}")
+        logger.info(f"加载 API 平台配置失败: {e}")
         return defaults
 
 def save_api_providers(providers):
@@ -1613,19 +1679,7 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 # --- Pydantic 模型 ---
 
 def current_app_version():
-    version_file = os.path.join(BASE_DIR, "VERSION")
-    try:
-        if os.path.exists(version_file):
-            with open(version_file, "r", encoding="utf-8") as f:
-                version = (f.read().strip().splitlines() or [""])[0].strip()
-                if version:
-                    return version
-    except Exception:
-        pass
-    try:
-        return time.strftime("%Y.%m.%d", time.localtime())
-    except Exception:
-        return ""
+    return APP_VERSION
 
 def update_notes_path() -> str:
     return os.path.join(STATIC_DIR, "update-notes.json")
@@ -1774,9 +1828,9 @@ def sync_static_html_versions():
                     with open(path, "w", encoding="utf-8", newline="") as f:
                         f.write(new)
             except Exception as e:
-                print(f"同步静态页面版本号失败({name}): {e}")
+                logger.info(f"同步静态页面版本号失败({name}): {e}")
     except Exception as e:
-        print(f"同步静态页面版本号失败: {e}")
+        logger.info(f"同步静态页面版本号失败: {e}")
 
 def static_html_response(filename: str):
     path = os.path.join(STATIC_DIR, filename)
@@ -2381,23 +2435,23 @@ def update_from_github(req: UpdateRequest = UpdateRequest()):
             if os.path.isdir(attempt_staging):
                 shutil.rmtree(attempt_staging, ignore_errors=True)
             label = UPDATE_SOURCE_LABELS.get(candidate, candidate)
-            print(f"[update] 尝试下载源 [{idx + 1}/{len(source_order)}] {label}（{candidate}）→ {attempt_staging}")
+            logger.info(f"[update] 尝试下载源 [{idx + 1}/{len(source_order)}] {label}（{candidate}）→ {attempt_staging}")
             try:
                 root_files, static_files, files = stage_update_from_source(candidate, attempt_staging)
                 source = candidate
                 staging_root = attempt_staging
                 fallback_used = idx > 0
-                print(f"[update] 下载源 {label} 成功，共 {len(files or [])} 个文件")
+                logger.info(f"[update] 下载源 {label} 成功，共 {len(files or [])} 个文件")
                 break
             except Exception as exc:  # noqa: BLE001 — 记录后尝试下一个源
                 if os.path.isdir(attempt_staging):
                     shutil.rmtree(attempt_staging, ignore_errors=True)
-                print(f"[update] 下载源 {label} 失败：{exc}")
+                logger.info(f"[update] 下载源 {label} 失败：{exc}")
                 traceback.print_exc()
                 download_errors.append(f"{label}：{exc}")
         if not staging_root:
             detail = "；".join(download_errors) or "未知错误"
-            print(f"[update] 所有下载源均失败 → {detail}")
+            logger.info(f"[update] 所有下载源均失败 → {detail}")
             raise HTTPException(status_code=502, detail=f"所有下载源均失败 → {detail}")
 
         updated = []
@@ -3156,7 +3210,7 @@ def get_best_backend(required_images: List[str] = None):
                 has_images = check_images_exist(addr, required_images)
                 backend_stats[addr] = {"load": effective_load, "has_images": has_images}
         except Exception as e:
-            print(f"Backend {addr} unreachable: {e}")
+            logger.info(f"Backend {addr} unreachable: {e}")
             continue
 
     if not backend_stats:
@@ -3180,7 +3234,7 @@ def reserve_best_backend(required_images: List[str] = None):
                 has_images = check_images_exist(addr, required_images)
                 backend_stats[addr] = {"remote_load": remote_load, "has_images": has_images}
         except Exception as e:
-            print(f"Backend {addr} unreachable: {e}")
+            logger.info(f"Backend {addr} unreachable: {e}")
             continue
     with LOAD_LOCK:
         best_backend = COMFYUI_INSTANCES[0]
@@ -3205,7 +3259,7 @@ def download_image(comfy_address, comfy_url_path, prefix="studio_"):
             shutil.copyfileobj(response, out_file)
         return output_url_for(filename, "output")
     except Exception as e:
-        print(f"下载图片失败: {e}")
+        logger.info(f"下载图片失败: {e}")
         if comfy_url_path.startswith("/view"):
             return comfy_url_path.replace("/view", "/api/view", 1)
         return full_url
@@ -3272,7 +3326,7 @@ def download_comfy_output(comfy_address, item, prefix="studio_"):
             shutil.copyfileobj(response, out_file)
         return output_url_for(filename, "output")
     except Exception as e:
-        print(f"下载 ComfyUI 输出失败: {e}")
+        logger.info(f"下载 ComfyUI 输出失败: {e}")
         if comfy_url_path.startswith("/view"):
             return comfy_url_path.replace("/view", "/api/view", 1)
         return full_url
@@ -3483,31 +3537,6 @@ def canvas_belongs_to_user(canvas, user_id=""):
         return True
     return str((canvas or {}).get("user_id") or "") == str(user_id)
 
-def load_projects(user_id=""):
-    if storage_db.is_configured():
-        data = storage_db.kv_get("projects", user_storage_id(user_id))
-        projects = (data or {}).get("projects") if isinstance(data, dict) else None
-        return [p for p in projects if isinstance(p, dict) and p.get("id")] if isinstance(projects, list) else []
-    path = user_projects_path(user_id) if user_id else PROJECTS_PATH
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        projects = data.get("projects") if isinstance(data, dict) else data
-        if isinstance(projects, list):
-            return [p for p in projects if isinstance(p, dict) and p.get("id")]
-    except Exception:
-        pass
-    return []
-
-def save_projects(projects, user_id=""):
-    with CANVAS_LOCK:
-        if storage_db.is_configured():
-            if storage_db.kv_set("projects", user_storage_id(user_id), {"projects": projects}):
-                return
-        path = user_projects_path(user_id) if user_id else PROJECTS_PATH
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump({"projects": projects}, f, ensure_ascii=False, indent=2)
-
 def project_record(p):
     return {
         "id": p.get("id"),
@@ -3516,85 +3545,6 @@ def project_record(p):
         "created_at": p.get("created_at", 0),
         "updated_at": p.get("updated_at", 0),
     }
-
-def ensure_default_project():
-    """保证存在一个“默认项目”，并把没有归属项目的画布迁移进去（一次性、幂等）。"""
-    projects = load_projects()
-    changed = False
-    if not any(p.get("id") == DEFAULT_PROJECT_ID for p in projects):
-        ts = now_ms()
-        projects.insert(0, {"id": DEFAULT_PROJECT_ID, "name": "默认项目", "order": 0, "created_at": ts, "updated_at": ts})
-        changed = True
-    if changed:
-        save_projects(projects)
-    return projects
-
-def new_project(name="新项目"):
-    projects = ensure_default_project()
-    ts = now_ms()
-    clean = (str(name or "").strip() or "新项目")[:60]
-    order = max([int(p.get("order") or 0) for p in projects], default=0) + 1
-    proj = {"id": uuid.uuid4().hex, "name": clean, "order": order, "created_at": ts, "updated_at": ts}
-    projects.append(proj)
-    save_projects(projects)
-    return proj
-
-def list_projects():
-    projects = ensure_default_project()
-    counts = {}
-    for rec in iter_canvas_records(include_deleted=False):
-        pid = rec.get("project") or DEFAULT_PROJECT_ID
-        counts[pid] = counts.get(pid, 0) + 1
-    out = []
-    for p in sorted(projects, key=lambda x: (int(x.get("order") or 0), x.get("created_at") or 0)):
-        rec = project_record(p)
-        rec["canvas_count"] = counts.get(rec["id"], 0)
-        out.append(rec)
-    return out
-
-def new_canvas(title="未命名画布", icon="layers", kind="classic", project=None, board_x=None, board_y=None):
-    timestamp = now_ms()
-    canvas_kind = normalize_canvas_kind(kind)
-    canvas = {
-        "id": uuid.uuid4().hex,
-        "title": (title or ("智能画布" if canvas_kind == "smart" else "未命名画布"))[:80],
-        "icon": (icon or ("sparkles" if canvas_kind == "smart" else "🧩"))[:32],
-        "kind": canvas_kind,
-        "owner": "",
-        "color": "",
-        "pinned": False,
-        "project": str(project or "").strip() or DEFAULT_PROJECT_ID,
-        "created_at": timestamp,
-        "updated_at": timestamp,
-        "nodes": [],
-        "connections": [],
-        "viewport": {"x": 0, "y": 0, "scale": 1},
-    }
-    if board_x is not None:
-        canvas["board_x"] = float(board_x)
-    if board_y is not None:
-        canvas["board_y"] = float(board_y)
-    save_canvas(canvas)
-    return canvas
-
-def load_canvas_any(canvas_id):
-    cleaned = canvas_id_clean(canvas_id)
-    if storage_db.is_configured():
-        canvas = storage_db.kv_get("canvases", cleaned)
-        if not isinstance(canvas, dict):
-            raise HTTPException(status_code=404, detail="画布不存在")
-        return canvas
-    path = canvas_path(cleaned)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="画布不存在")
-    with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-def load_canvas(canvas_id):
-    canvas = load_canvas_any(canvas_id)
-    if canvas.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="画布已在回收站")
-    return canvas
 
 CANVAS_COLORS = {"", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink", "slate"}
 
@@ -3619,70 +3569,6 @@ def canvas_record(data):
         "deleted_at": data.get("deleted_at", 0),
         "node_count": len(data.get("nodes", [])),
     }
-
-def iter_all_canvas_data():
-    """Yield every raw canvas dict, from Postgres if configured, else scanning CANVAS_DIR."""
-    if storage_db.is_configured():
-        for data in storage_db.kv_list("canvases"):
-            if isinstance(data, dict):
-                yield data
-        return
-    for filename in os.listdir(CANVAS_DIR):
-        if not filename.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as f:
-                yield json.load(f)
-        except Exception:
-            continue
-
-def cleanup_expired_canvas_trash():
-    cutoff = now_ms() - CANVAS_TRASH_RETENTION_MS
-    with CANVAS_LOCK:
-        if storage_db.is_configured():
-            for data in storage_db.kv_list("canvases"):
-                if not isinstance(data, dict):
-                    continue
-                deleted_at = int(data.get("deleted_at") or 0)
-                if deleted_at and deleted_at < cutoff:
-                    storage_db.kv_delete("canvases", canvas_id_clean(data.get("id")))
-            return
-        for filename in os.listdir(CANVAS_DIR):
-            if not filename.endswith(".json"):
-                continue
-            path = os.path.join(CANVAS_DIR, filename)
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                deleted_at = int(data.get("deleted_at") or 0)
-                if deleted_at and deleted_at < cutoff:
-                    os.remove(path)
-            except Exception:
-                continue
-
-def iter_canvas_records(include_deleted=False):
-    cleanup_expired_canvas_trash()
-    records = []
-    for data in iter_all_canvas_data():
-        is_deleted = bool(data.get("deleted_at"))
-        if include_deleted != is_deleted:
-            continue
-        records.append(canvas_record(data))
-    return records
-
-def list_canvases():
-    records = iter_canvas_records(include_deleted=False)
-    return sorted(
-        records,
-        key=lambda item: (
-            0 if item.get("pinned") else 1,
-            -int(item.get("updated_at") or item.get("created_at") or 0),
-        ),
-    )
-
-def list_deleted_canvases():
-    records = iter_canvas_records(include_deleted=True)
-    return sorted(records, key=lambda item: item["deleted_at"], reverse=True)
 
 def canvas_asset_url_value(value):
     if isinstance(value, str):
@@ -3787,34 +3673,6 @@ def extract_canvas_assets(canvas):
                         item[key] = raw.get(key)
             items.append(item)
     return items
-
-def canvas_assets_index():
-    canvases = []
-    items = []
-    canvas_counts = {"all": 0, "smart": 0, "classic": 0}
-    item_counts = {"all": 0, "smart": 0, "classic": 0}
-    cleanup_expired_canvas_trash()
-    for canvas in iter_all_canvas_data():
-        if canvas.get("deleted_at"):
-            continue
-        record = canvas_record(canvas)
-        canvas_items = extract_canvas_assets(canvas)
-        record["asset_count"] = len(canvas_items)
-        canvases.append(record)
-        items.extend(canvas_items)
-        kind = record.get("kind") or "classic"
-        canvas_counts["all"] += 1
-        canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
-        item_counts["all"] += len(canvas_items)
-        item_counts[kind] = item_counts.get(kind, 0) + len(canvas_items)
-    canvases.sort(key=lambda item: (0 if item.get("pinned") else 1, -int(item.get("updated_at") or item.get("created_at") or 0)))
-    items.sort(key=lambda item: int(item.get("canvas_updated_at") or item.get("created_at") or 0), reverse=True)
-    categories = [
-        {"id": "all", "name": "全部画布", "count": item_counts.get("all", 0), "canvas_count": canvas_counts.get("all", 0)},
-        {"id": "smart", "name": "智能画布", "count": item_counts.get("smart", 0), "canvas_count": canvas_counts.get("smart", 0)},
-        {"id": "classic", "name": "普通画布", "count": item_counts.get("classic", 0), "canvas_count": canvas_counts.get("classic", 0)},
-    ]
-    return {"categories": categories, "canvases": canvases, "items": items}
 
 def load_projects(user_id=""):
     if storage_db.is_configured():
@@ -4066,10 +3924,10 @@ def log_net_error(context, exc, url=""):
             proxies = urllib.request.getproxies() or "无"
         except Exception:
             proxies = "?"
-        print(f"[NET-ERR] {context} | url={url or '?'} | sys_proxy={proxies} | " + " <- ".join(chain), flush=True)
+        logger.info(f"[NET-ERR] {context} | url={url or '?'} | sys_proxy={proxies} | " + " <- ".join(chain))
     except Exception:
         try:
-            print(f"[NET-ERR] {context} | {type(exc).__name__}: {exc}", flush=True)
+            logger.info(f"[NET-ERR] {context} | {type(exc).__name__}: {exc}")
         except Exception:
             pass
 
@@ -4566,9 +4424,9 @@ async def responses_input_image_url(ref, require_public_url=False) -> str:
         if url.startswith(("http://", "https://")):
             return url
     except HTTPException as exc:
-        print(f"RS 参考图上传图床失败，回退内联 base64：{exc.detail}")
+        logger.info(f"RS 参考图上传图床失败，回退内联 base64：{exc.detail}")
     except Exception as exc:
-        print(f"RS 参考图上传图床异常，回退内联 base64：{exc}")
+        logger.info(f"RS 参考图上传图床异常，回退内联 base64：{exc}")
     data_url = reference_to_data_url({"url": local_path}, max_size=1536)
     return data_url if data_url.startswith("data:") else ""
 
@@ -4655,10 +4513,10 @@ async def post_openai_responses(client, url, headers, body):
     try:
         resp = await client.post(url, headers=headers, json=bg_body)
     except httpx.HTTPError as e:
-        print(f"RS background 请求传输失败，改走流式：{e}")
+        logger.info(f"RS background 请求传输失败，改走流式：{e}")
         return await post_openai_responses_stream(client, url, headers, body)
     if resp.status_code in RESPONSES_REJECT_STATUSES:
-        print(f"RS background 模式被拒（{resp.status_code}），改走流式：{resp.text[:200]}")
+        logger.info(f"RS background 模式被拒（{resp.status_code}），改走流式：{resp.text[:200]}")
         return await post_openai_responses_stream(client, url, headers, body)
     if resp.status_code >= 400:
         if resp.status_code == 524:
@@ -4725,7 +4583,7 @@ async def post_openai_responses_stream(client, url, headers, body):
                 # 个别中转不支持 responses 流式（对 stream 参数直接报错）→ 回退一次非流式。
                 # 仅对“请求被拒绝”类状态码回退，5xx/超时不重试，避免上游已开始生成后重复扣费。
                 if resp.status_code in {400, 404, 405, 415, 422}:
-                    print(f"RS 流式请求被拒（{resp.status_code}），回退非流式：{content[:200]!r}")
+                    logger.info(f"RS 流式请求被拒（{resp.status_code}），回退非流式：{content[:200]!r}")
                     return await client.post(url, headers=headers, json=body)
                 return httpx.Response(resp.status_code, headers=resp.headers, content=content, request=request)
             completed = None
@@ -4814,7 +4672,7 @@ async def post_openai_responses_stream(client, url, headers, body):
                 return wrap(200, completed)
             return wrap(502, error_payload or {"error": {"message": "RS 流式响应结束但没有 response.completed 事件"}})
     except httpx.HTTPError as e:
-        print(f"RS 流式请求传输失败，回退非流式：{e}")
+        logger.info(f"RS 流式请求传输失败，回退非流式：{e}")
         return await client.post(url, headers=headers, json=body)
 
 def provider_protocol(provider):
@@ -5310,7 +5168,7 @@ def codex_postprocess_image_to_requested_size(path="", requested_size="", provid
             return upscaled_path
     except Exception as exc:
         label = "Gemini CLI" if provider_text == "gemini-cli" else "Codex GPT Image 2"
-        print(f"{label} 图片尺寸后处理失败：{exc}")
+        logger.info(f"{label} 图片尺寸后处理失败：{exc}")
         return ""
 
 async def generate_codex_provider_image_via_gpt_image_2_skill(prompt, size, model, ref_paths=None):
@@ -5953,7 +5811,7 @@ def jimeng_wsl_base_args(exe="wsl.exe"):
     if configured and (not names or configured in names):
         return ["-d", configured]
     if configured and names:
-        print(f"JIMENG_WSL_DISTRO={configured} 不存在，已回退自动选择。可用发行版：{names}")
+        logger.info(f"JIMENG_WSL_DISTRO={configured} 不存在，已回退自动选择。可用发行版：{names}")
     try:
         ubuntu = next((name for name in names if re.match(r"^Ubuntu($|-)", name)), "")
         if ubuntu:
@@ -6841,7 +6699,7 @@ async def httpx_request_with_transient_retries(client, method, url, attempts=2, 
             last_exc = exc
             if attempt + 1 >= attempts:
                 raise
-            print(f"[HTTPX-RETRY] {method} {url} transient error: {exc}; retry {attempt + 2}/{attempts}", flush=True)
+            logger.info(f"[HTTPX-RETRY] {method} {url} transient error: {exc}; retry {attempt + 2}/{attempts}")
             await asyncio.sleep(retry_delay * (attempt + 1))
     if last_exc:
         raise last_exc
@@ -7772,7 +7630,7 @@ def remove_asset_library_file(item) -> None:
             _r2_delete_for_path(path)
             os.remove(path)
     except Exception as exc:
-        print(f"删除资产文件失败: {exc}")
+        logger.info(f"删除资产文件失败: {exc}")
 
 def make_asset_library_item(src: str, name: str = "", subdir: str = "") -> Tuple[str, Dict[str, Any]]:
     kind = asset_library_media_kind(src)
@@ -7836,7 +7694,7 @@ def load_asset_classification_prompt():
                 if text:
                     return text
     except Exception as exc:
-        print(f"读取素材分类规则失败: {exc}")
+        logger.info(f"读取素材分类规则失败: {exc}")
     return ASSET_CLASSIFICATION_PROMPT
 
 def save_asset_classification_prompt(text):
@@ -7983,7 +7841,7 @@ async def classify_asset_image_best_effort(abs_path, provider_id="", model="", m
     try:
         return await classify_image_with_provider(abs_path, provider_id, model, ms_model, prompt)
     except Exception as exc:
-        print(f"素材智能分类失败: {exc}")
+        logger.info(f"素材智能分类失败: {exc}")
         return None
 
 def migrate_asset_library_into_dirs():
@@ -7992,7 +7850,7 @@ def migrate_asset_library_into_dirs():
     try:
         lib = load_asset_library()
     except Exception as exc:
-        print(f"资产库分组整理：加载失败 {exc}")
+        logger.info(f"资产库分组整理：加载失败 {exc}")
         return
     changed = False
     for library in lib.get("libraries", []) or []:
@@ -8008,7 +7866,7 @@ def migrate_asset_library_into_dirs():
             try:
                 os.makedirs(os.path.join(ASSET_LIBRARY_DIR, cat_dir), exist_ok=True)
             except Exception as exc:
-                print(f"资产库分组整理：建文件夹失败 {exc}")
+                logger.info(f"资产库分组整理：建文件夹失败 {exc}")
                 continue
             for item in (cat.get("items") or []):
                 raw_url = urllib.parse.unquote(str(item.get("url") or "").split("?", 1)[0])
@@ -8026,12 +7884,12 @@ def migrate_asset_library_into_dirs():
                     item["url"] = asset_library_public_url(dst, f"{cat_dir}/{fname}")
                     changed = True
                 except Exception as exc:
-                    print(f"资产库分组整理：搬运 {fname} 失败 {exc}")
+                    logger.info(f"资产库分组整理：搬运 {fname} 失败 {exc}")
     if changed:
         try:
             save_asset_library(lib)
         except Exception as exc:
-            print(f"资产库分组整理：保存失败 {exc}")
+            logger.info(f"资产库分组整理：保存失败 {exc}")
 
 def asset_library_workflow_category(lib, library_id="", category_id=""):
     library = find_asset_library(lib, library_id)
@@ -8208,7 +8066,7 @@ def image_path_to_data_url(path, max_size=1024):
                 mime = "image/png" if fmt == "PNG" else "image/jpeg"
                 return f"data:{mime};base64,{encoded}"
         except Exception as e:
-            print(f"shared caption image resize failed: {e}")
+            logger.info(f"shared caption image resize failed: {e}")
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("ascii")
     return f"data:{content_type_for_path(path)};base64,{encoded}"
@@ -8270,7 +8128,7 @@ def builtin_prompt_templates():
         with open(template_path, "r", encoding="utf-8") as f:
             return parse_prompt_template_markdown(f.read())
     except Exception as e:
-        print(f"读取提示词模板失败: {e}")
+        logger.info(f"读取提示词模板失败: {e}")
         return []
 
 def normalize_prompt_category_id(category="custom"):
@@ -8544,7 +8402,7 @@ def convert_output_to_jpg(url, quality=88):
         prefix = "/assets" if root == ASSETS_DIR else "/output"
         return f"{prefix}/{rel}"
     except Exception as e:
-        print(f"转换 JPG 失败: {e}")
+        logger.info(f"转换 JPG 失败: {e}")
         return url
 
 def reference_to_data_url(ref, max_size=None):
@@ -8568,7 +8426,7 @@ def reference_to_data_url(ref, max_size=None):
                 mime = "image/png" if fmt == "PNG" else "image/jpeg"
                 return f"data:{mime};base64,{encoded}"
         except Exception as e:
-            print(f"reference resize failed, fallback to raw: {e}")
+            logger.info(f"reference resize failed, fallback to raw: {e}")
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("ascii")
     return f"data:{content_type_for_path(path)};base64,{encoded}"
@@ -8748,9 +8606,9 @@ def xlsx_embedded_image_data_urls(path, max_images=4, max_size=1536):
                         encoded = base64.b64encode(buf.getvalue()).decode("ascii")
                         urls.append(f"data:image/jpeg;base64,{encoded}")
                 except Exception as exc:
-                    print(f"[chat] failed to extract xlsx image {name}: {exc}")
+                    logger.info(f"[chat] failed to extract xlsx image {name}: {exc}")
     except Exception as exc:
-        print(f"[chat] failed to read xlsx images {path}: {exc}")
+        logger.info(f"[chat] failed to read xlsx images {path}: {exc}")
     return urls
 
 def attachment_embedded_image_data_urls(refs, max_images=4):
@@ -8796,7 +8654,7 @@ def read_text_attachment(path, limit=MAX_ATTACHMENT_TEXT_CHARS):
                     continue
             return data.decode("utf-8", errors="replace").strip()[:limit]
     except Exception as exc:
-        print(f"[chat] failed to read attachment text {path}: {exc}")
+        logger.info(f"[chat] failed to read attachment text {path}: {exc}")
     return ""
 
 def attachment_text_blocks(refs, limit_each=MAX_ATTACHMENT_TEXT_CHARS):
@@ -8945,7 +8803,7 @@ async def video_reference_to_frame_data_urls(value, max_frames=6, max_size=768):
                     f.write(response.content)
             path = cleanup_path
         except Exception as e:
-            print(f"[canvas-llm] video download failed: {e}")
+            logger.info(f"[canvas-llm] video download failed: {e}")
             if cleanup_path and os.path.exists(cleanup_path):
                 try: os.remove(cleanup_path)
                 except OSError: pass
@@ -8967,7 +8825,7 @@ async def video_reference_to_frame_data_urls(value, max_frames=6, max_size=768):
         ]
         proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=90)
         if proc.returncode != 0:
-            print(f"[canvas-llm] ffmpeg frame extract failed: {proc.stderr[:300]}")
+            logger.info(f"[canvas-llm] ffmpeg frame extract failed: {proc.stderr[:300]}")
             return []
         frames = []
         for name in sorted(os.listdir(frame_dir)):
@@ -9009,7 +8867,7 @@ def compress_data_url_image(value, max_size=1536, jpeg_quality=88):
                 img.save(buf, format=fmt, optimize=True)
             return f"data:{mime};base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
     except Exception as e:
-        print(f"data url image compress failed, fallback to raw: {e}")
+        logger.info(f"data url image compress failed, fallback to raw: {e}")
         return value
 
 def modelscope_image_url(value, max_size=1536):
@@ -9314,7 +9172,7 @@ async def apimart_upload_post(client, upload_url, headers, file_tuple, timeout=6
             if not is_transient_tls_error(e) or attempt == APIMART_UPLOAD_RETRY_ATTEMPTS - 1:
                 raise
             last_exc = e
-            print(f"APIMart 上传遇到瞬时 TLS 错误，换新连接重试（第 {attempt + 1} 次）：{e}")
+            logger.info(f"APIMart 上传遇到瞬时 TLS 错误，换新连接重试（第 {attempt + 1} 次）：{e}")
             await asyncio.sleep(0.6 * (attempt + 1))
     if last_exc:
         raise last_exc
@@ -9347,20 +9205,20 @@ async def upload_image_for_apimart(client, provider, ref_url: str) -> str:
                 url = extract_apimart_asset_url(rj)
                 if valid_apimart_video_image_input(url):
                     return url
-                print(f"APIMart 上传 data URL 返回中未找到可用 asset/url: {str(rj)[:300]}")
+                logger.info(f"APIMart 上传 data URL 返回中未找到可用 asset/url: {str(rj)[:300]}")
                 return "ERR:APIMart 上传响应未包含可用 URL"
-            print(f"APIMart 上传 data URL 失败 ({resp.status_code}): {resp.text[:300]}")
+            logger.info(f"APIMart 上传 data URL 失败 ({resp.status_code}): {resp.text[:300]}")
             return f"ERR:APIMart 上传失败({resp.status_code})"
         except ValueError as e:
             return f"ERR:{e}"
         except Exception as e:
-            print(f"APIMart 上传 data URL 异常: {e}")
+            logger.info(f"APIMart 上传 data URL 异常: {e}")
             return f"ERR:上传异常 {e}"
     # 本地 /output/ 或 /assets/ 路径：先确认文件存在再上传
     if ref_url.startswith("/output/") or ref_url.startswith("/assets/"):
         path = output_file_from_url(ref_url)
         if not path:
-            print(f"APIMart 上传跳过：本地文件不存在 {ref_url}")
+            logger.info(f"APIMart 上传跳过：本地文件不存在 {ref_url}")
             return "ERR:本地文件不存在或已被删除"
         try:
             filename, content, ct = apimart_upload_file_payload(path)
@@ -9370,14 +9228,14 @@ async def upload_image_for_apimart(client, provider, ref_url: str) -> str:
                 url = extract_apimart_asset_url(rj)
                 if valid_apimart_video_image_input(url):
                     return url
-                print(f"APIMart 文件上传返回中未找到可用 asset/url: {str(rj)[:300]}")
+                logger.info(f"APIMart 文件上传返回中未找到可用 asset/url: {str(rj)[:300]}")
                 return "ERR:APIMart 上传响应未包含可用 URL"
-            print(f"APIMart 文件上传失败 ({resp.status_code}): {resp.text[:300]}")
+            logger.info(f"APIMart 文件上传失败 ({resp.status_code}): {resp.text[:300]}")
             return f"ERR:APIMart 上传失败({resp.status_code})"
         except ValueError as e:
             return f"ERR:{e}"
         except Exception as e:
-            print(f"APIMart 文件上传异常: {e}")
+            logger.info(f"APIMart 文件上传异常: {e}")
             return f"ERR:上传异常 {e}"
     return "ERR:不支持的图片来源（仅支持 http/https/asset/data 或本地 /output/ /assets/ 路径）"
 
@@ -9417,13 +9275,13 @@ async def upload_video_for_apimart(client, provider, ref_url: str) -> str:
                 if valid_apimart_video_image_input(url):
                     return url
                 last_error = "上传响应未包含可用 URL"
-                print(f"APIMart 视频上传返回中未找到可用 asset/url ({upload_path}): {str(rj)[:300]}")
+                logger.info(f"APIMart 视频上传返回中未找到可用 asset/url ({upload_path}): {str(rj)[:300]}")
                 continue
             last_error = f"{upload_path} 返回 {resp.status_code}: {resp.text[:200]}"
-            print(f"APIMart 视频上传失败 {last_error}")
+            logger.info(f"APIMart 视频上传失败 {last_error}")
         except Exception as e:
             last_error = f"{upload_path} 异常：{e}"
-            print(f"APIMart 视频上传异常: {last_error}")
+            logger.info(f"APIMart 视频上传异常: {last_error}")
     return f"ERR:APIMart 未提供可用的视频文件上传入口（{last_error}）。请配置 PUBLIC_BASE_URL，或使用公网 http/https / asset:// 视频地址。"
 
 async def upload_audio_for_apimart(client, provider, ref_url: str) -> str:
@@ -9824,7 +9682,7 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
                 f.write(response.content)
             return output_url_for(filename, category)
     except Exception as e:
-        print(f"保存上游图片失败: {e}; url={value}")
+        logger.info(f"保存上游图片失败: {e}; url={value}")
         return value
 
 def image_output_meta(url, source_item=None):
@@ -9905,7 +9763,7 @@ async def save_remote_video_to_output(url, prefix="video_", category="output"):
                 raise RuntimeError("empty video response")
             return output_url_for(filename, category)
     except Exception as e:
-        print(f"保存上游视频失败: {e}")
+        logger.info(f"保存上游视频失败: {e}")
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -11732,7 +11590,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                         status_code=502,
                         detail=f"GPT-Image-2 编辑接口 /images/edits 调用失败：{edit_failed_text[:300] or edit_failed_status}。已停止自动重试，避免上游可能已扣费后再次请求。"
                     )
-                print(f"/images/edits failed ({edit_failed_status}): {edit_failed_text[:200]} → 回退到 /images/generations + image:[] JSON")
+                logger.info(f"/images/edits failed ({edit_failed_status}): {edit_failed_text[:200]} → 回退到 /images/generations + image:[] JSON")
                 image_payload = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
                 body = {
                     "model": model, "prompt": prompt, "size": size,
@@ -11805,7 +11663,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 if fallback_image:
                     return fallback_image, raw
                 try:
-                    print(f"RS 响应中没有图片，原始返回（截断）：{json.dumps(raw, ensure_ascii=False)[:800]}")
+                    logger.info(f"RS 响应中没有图片，原始返回（截断）：{json.dumps(raw, ensure_ascii=False)[:800]}")
                 except Exception:
                     pass
                 raise HTTPException(status_code=502, detail=responses_no_image_detail(raw) or exc.detail)
@@ -11876,7 +11734,7 @@ def image_size_from_reference(ref):
         if width > 0 and height > 0:
             return f"{width}x{height}"
     except Exception as exc:
-        print(f"[chat-agent] failed to read reference image size: {exc}")
+        logger.info(f"[chat-agent] failed to read reference image size: {exc}")
     return ""
 
 def chat_requested_image_count(message):
@@ -12011,7 +11869,7 @@ async def decide_chat_agent_action(payload, conversation, refs):
             decision["router_model"] = model
             return decision
     except Exception as exc:
-        print(f"[chat-agent] intent router fallback: {exc}")
+        logger.info(f"[chat-agent] intent router fallback: {exc}")
         fallback["router_model"] = model
         return fallback
 
@@ -12163,7 +12021,7 @@ async def upload_image(files: List[UploadFile] = File(...)):
                     last_result = response.json()
                     success_count += 1
             except Exception as e:
-                print(f"Upload error for {addr}: {e}")
+                logger.info(f"Upload error for {addr}: {e}")
 
         if success_count > 0 and last_result:
             uploaded_files.append({"comfy_name": last_result.get("name", file.filename)})
@@ -12273,7 +12131,7 @@ async def upload_comfyui_base64(payload: Base64UploadRequest):
             if resp.status_code == 200:
                 comfy_name = resp.json().get("name", filename)
         except Exception as exc:
-            print(f"ComfyUI base64 upload error for {addr}: {exc}")
+            logger.info(f"ComfyUI base64 upload error for {addr}: {exc}")
     if not comfy_name:
         raise HTTPException(status_code=502, detail="上传到 ComfyUI 失败")
     return {"name": comfy_name}
@@ -12488,7 +12346,7 @@ def migrate_double_extension_uploads():
                     except OSError:
                         pass
     if renamed:
-        print(f"修复双重扩展名素材: {renamed} 个")
+        logger.info(f"修复双重扩展名素材: {renamed} 个")
 
 def _sniff_image_ext_bytes(head):
     """按文件头魔数判断真实图片格式，返回规范扩展名（含点），无法识别返回 None。"""
@@ -12550,7 +12408,7 @@ def migrate_mislabeled_image_extensions():
                     except OSError:
                         pass
     if fixed:
-        print(f"纠正图片扩展名(内容与后缀不符): {fixed} 个")
+        logger.info(f"纠正图片扩展名(内容与后缀不符): {fixed} 个")
 
 @app.post("/api/local-assets/upload")
 async def upload_local_assets(files: List[UploadFile] = File(...), folder: str = Form("")):
@@ -15771,7 +15629,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
         try:
             return await generate_runninghub_video(payload, provider)
         except HTTPException as exc:
-            print(f"RunningHub 视频生成失败 model={payload.model}: {exc.detail}")
+            logger.info(f"RunningHub 视频生成失败 model={payload.model}: {exc.detail}")
             raise
         except httpx.HTTPStatusError as exc:
             text = exc.response.text
@@ -16314,7 +16172,7 @@ async def canvas_llm(payload: CanvasLLMRequest, request: Request):
                     continue
                 content_parts.append({"type": "video_url", "video_url": {"url": ref_url}})
                 ok_videos += 1
-        print(f"[canvas-llm] model={model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)} videos={ok_videos}/{len(payload.videos)}")
+        logger.info(f"[canvas-llm] model={model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)} videos={ok_videos}/{len(payload.videos)}")
         upstream_messages.append({"role": "user", "content": content_parts})
     else:
         upstream_messages.append({"role": "user", "content": payload.message})
@@ -16414,6 +16272,7 @@ async def email_password_register(payload: EmailPasswordRegisterRequest, request
         raise HTTPException(status_code=400, detail="Enter a username")
     if not password:
         raise HTTPException(status_code=400, detail="Password must be 8-128 characters")
+    ensure_auth_rate_limit(request, "register", email)
     if len(code) != 6 or not storage_db.consume_email_login_code(email, auth_code_hash(email, code)):
         raise HTTPException(status_code=400, detail="Invalid or expired verification code")
     user = storage_db.create_email_password_user(email, nickname, password_hash_value(password))
@@ -16431,6 +16290,7 @@ async def email_password_login(payload: EmailPasswordLoginRequest, request: Requ
     password = str(payload.password or "")
     if not email or not password:
         raise HTTPException(status_code=400, detail="Enter email and password")
+    ensure_auth_rate_limit(request, "password_login", email)
     user = storage_db.get_user_by_email(email)
     if not user or not user.get("password_hash") or not verify_password_hash(password, user.get("password_hash")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -16444,6 +16304,7 @@ async def email_login_start(payload: EmailLoginStartRequest, request: Request):
     email = normalize_login_email(payload.email)
     if not email:
         raise HTTPException(status_code=400, detail="请输入有效邮箱")
+    ensure_auth_rate_limit(request, "email_start", email)
     now = time.time()
     last_sent = EMAIL_CODE_LAST_SENT.get(email, 0)
     remaining = int(EMAIL_CODE_COOLDOWN_SECONDS - (now - last_sent))
@@ -16471,6 +16332,7 @@ async def email_login_verify(payload: EmailLoginVerifyRequest, request: Request)
     code = re.sub(r"\D", "", str(payload.code or ""))[:6]
     if not email or len(code) != 6:
         raise HTTPException(status_code=400, detail="邮箱或验证码格式不正确")
+    ensure_auth_rate_limit(request, "email_verify", email)
     if not storage_db.consume_email_login_code(email, auth_code_hash(email, code)):
         raise HTTPException(status_code=400, detail="验证码错误或已过期")
     user = storage_db.get_user_by_email(email)
@@ -16647,7 +16509,7 @@ async def smart_canvas_prompt_templates():
         source = os.path.relpath(template_path, BASE_DIR).replace("\\", "/") if template_path else ""
         return {"templates": builtin_prompt_templates(), "source": source}
     except Exception as e:
-        print(f"读取提示词模板失败: {e}")
+        logger.info(f"读取提示词模板失败: {e}")
         return {"templates": []}
 
 @app.post("/api/canvas-assets/check")
@@ -17210,7 +17072,7 @@ async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
         try:
             os.makedirs(os.path.join(ASSET_LIBRARY_DIR, category["dir"]), exist_ok=True)
         except Exception as exc:
-            print(f"创建分组文件夹失败: {exc}")
+            logger.info(f"创建分组文件夹失败: {exc}")
     library.setdefault("categories", []).append(category)
     lib["active_library_id"] = library.get("id") or lib.get("active_library_id")
     save_asset_library(lib)
@@ -17244,7 +17106,7 @@ async def delete_asset_library_category(category_id: str, library_id: str = ""):
             if os.path.isdir(target) and os.path.abspath(target).startswith(os.path.abspath(ASSET_LIBRARY_DIR) + os.sep):
                 shutil.rmtree(target, ignore_errors=True)
         except Exception as exc:
-            print(f"删除分组文件夹失败: {exc}")
+            logger.info(f"删除分组文件夹失败: {exc}")
     library["categories"] = [c for c in library.get("categories", []) if c.get("id") != category_id]
     save_asset_library(lib)
     return {"library": lib}
@@ -18431,7 +18293,7 @@ async def get_history_api(type: str = None):
                 data.sort(key=sort_key, reverse=True)
                 return data
         except Exception as e:
-            print(f"读取历史文件失败: {e}")
+            logger.info(f"读取历史文件失败: {e}")
             return []
     return []
 
@@ -18477,12 +18339,12 @@ async def delete_history(req: DeleteHistoryRequest):
                         _r2_delete_for_path(file_path)
                         os.remove(file_path)
                     except Exception as e:
-                        print(f"Failed to delete file {file_path}: {e}")
+                        logger.info(f"Failed to delete file {file_path}: {e}")
             return {"success": True}
         else:
             return {"success": False, "message": "Record not found"}
     except Exception as e:
-        print(f"Delete history error: {e}")
+        logger.info(f"Delete history error: {e}")
         return {"success": False, "message": str(e)}
 
 # --- ModelScope 角度控制 ---
@@ -18500,7 +18362,7 @@ async def poll_angle_cloud(req: CloudPollRequest):
         "X-ModelScope-Async-Mode": "true"
     }
     task_id = req.task_id
-    print(f"Resuming polling for Angle Task: {task_id}")
+    logger.info(f"Resuming polling for Angle Task: {task_id}")
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -18555,7 +18417,7 @@ async def poll_angle_cloud(req: CloudPollRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Angle polling error: {e}")
+        logger.info(f"Angle polling error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/angle/generate")
@@ -18592,7 +18454,7 @@ async def generate_angle_cloud(req: CloudGenRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
-            print(f"Angle Task submitted, ID: {task_id}")
+            logger.info(f"Angle Task submitted, ID: {task_id}")
 
             for i in range(300):
                 await asyncio.sleep(2)
@@ -18647,7 +18509,7 @@ async def generate_angle_cloud(req: CloudGenRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Angle generation error: {e}")
+        logger.info(f"Angle generation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # --- ModelScope Z-Image 云端生图 ---
@@ -18687,7 +18549,7 @@ async def generate_cloud(req: CloudGenRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
-            print(f"Z-Image Task submitted, ID: {task_id}")
+            logger.info(f"Z-Image Task submitted, ID: {task_id}")
 
             for i in range(200):
                 await asyncio.sleep(3)
@@ -18700,7 +18562,7 @@ async def generate_cloud(req: CloudGenRequest):
                 status = str(data.get("task_status") or "").upper()
 
                 if i % 5 == 0:
-                    print(f"Task {task_id} status check {i}: {status}")
+                    logger.info(f"Task {task_id} status check {i}: {status}")
 
                 if status == "SUCCEED":
                     img_url = data["output_images"][0]
@@ -18717,7 +18579,7 @@ async def generate_cloud(req: CloudGenRequest):
                             else:
                                 local_path = img_url
                     except Exception as dl_e:
-                        print(f"Download error: {dl_e}")
+                        logger.info(f"Download error: {dl_e}")
                         local_path = img_url
 
                     record = {"timestamp": time.time(), "prompt": req.prompt, "images": [local_path], "type": "cloud"}
@@ -18736,7 +18598,7 @@ async def generate_cloud(req: CloudGenRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Cloud generation error: {e}")
+        logger.info(f"Cloud generation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # --- ModelScope 通用图片生成（支持图生图） ---
@@ -18783,7 +18645,7 @@ async def ms_generate(req: MsGenerateRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
-            print(f"MS Generate Task submitted ({req.model}), ID: {task_id}")
+            logger.info(f"MS Generate Task submitted ({req.model}), ID: {task_id}")
 
             TERMINAL_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "TIMEOUT", "REVOKED"}
 
@@ -18796,7 +18658,7 @@ async def ms_generate(req: MsGenerateRequest):
                     )
                     data = result.json()
                     status = data.get("task_status")
-                    print(f"MS Task {task_id} poll {i}: status={status}")
+                    logger.info(f"MS Task {task_id} poll {i}: status={status}")
 
                     if status == "SUCCEED":
                         img_url = data["output_images"][0]
@@ -18834,7 +18696,7 @@ async def ms_generate(req: MsGenerateRequest):
                 except HTTPException:
                     raise
                 except Exception as loop_e:
-                    print(f"MS polling error: {loop_e}")
+                    logger.info(f"MS polling error: {loop_e}")
                     continue
 
             raise HTTPException(status_code=504, detail="MS 生图超时")
@@ -18842,7 +18704,7 @@ async def ms_generate(req: MsGenerateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"MS generate error: {e}")
+        logger.info(f"MS generate error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # --- 本地 ComfyUI 生图 ---
@@ -18893,7 +18755,7 @@ def generate(req: GenerateRequest):
                         files = {'image': (image_name, image_content, image_type)}
                         requests.post(f"http://{target_backend}/upload/image", files=files, timeout=10)
                     except Exception as e:
-                        print(f"Sync upload failed: {e}")
+                        logger.info(f"Sync upload failed: {e}")
 
         workflow_path = os.path.join(WORKFLOW_DIR, req.workflow_json)
         if not os.path.exists(workflow_path) and req.workflow_json == "Z-Image.json":

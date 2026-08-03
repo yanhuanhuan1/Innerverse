@@ -12,7 +12,9 @@ main.py unchanged.
 import os
 import mimetypes
 import urllib.parse
+import logging
 from typing import Optional
+logger = logging.getLogger(__name__)
 
 _R2_ACCOUNT_ID = str(os.getenv("R2_ACCOUNT_ID", "")).strip()
 _R2_ACCESS_KEY_ID = str(os.getenv("R2_ACCESS_KEY_ID", "")).strip()
@@ -54,7 +56,7 @@ def _get_client():
         return _client
     except Exception as exc:
         _client_error = exc
-        print(f"[storage_r2] failed to init R2 client: {exc}")
+        logger.info(f"[storage_r2] failed to init R2 client: {exc}")
         return None
 
 
@@ -88,7 +90,7 @@ def upload_bytes(rel_path: str, data: bytes, content_type: str = "") -> bool:
         )
         return True
     except Exception as exc:
-        print(f"[storage_r2] upload failed for {clean}: {exc}")
+        logger.info(f"[storage_r2] upload failed for {clean}: {exc}")
         return False
 
 
@@ -104,7 +106,7 @@ def upload_file(rel_path: str, local_path: str, content_type: str = "") -> bool:
         client.upload_file(local_path, _R2_BUCKET_NAME, clean, ExtraArgs=extra_args)
         return True
     except Exception as exc:
-        print(f"[storage_r2] upload_file failed for {clean}: {exc}")
+        logger.info(f"[storage_r2] upload_file failed for {clean}: {exc}")
         return False
 
 
@@ -168,7 +170,7 @@ def list_objects(prefix: str):
                     "last_modified": obj.get("LastModified"),
                 })
     except Exception as exc:
-        print(f"[storage_r2] list_objects failed for {clean_prefix}: {exc}")
+        logger.info(f"[storage_r2] list_objects failed for {clean_prefix}: {exc}")
     return items
 
 

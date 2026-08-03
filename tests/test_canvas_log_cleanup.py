@@ -39,11 +39,22 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "HISTORY_FILE", str(self.history)),
             patch.object(main, "GLOBAL_CONFIG_FILE", str(self.global_config)),
             patch.object(main, "ASSET_LIBRARY_PATH", str(self.asset_library)),
+            patch.object(main, "require_current_user", return_value={"id": ""}),
         ]
         for item in self.patches:
             item.start()
+        # delete_canvas_log is an endpoint handler that requires a FastAPI
+        # Request for auth; the tests exercise the core logic directly, so
+        # bridge the signature with a fixed request.
+        self._original_delete_canvas_log = main.delete_canvas_log
+
+        def delete_canvas_log_without_request(canvas_id, payload):
+            return self._original_delete_canvas_log(canvas_id, payload, None)
+
+        main.delete_canvas_log = delete_canvas_log_without_request
 
     def tearDown(self):
+        main.delete_canvas_log = self._original_delete_canvas_log
         for item in reversed(self.patches):
             item.stop()
         self.temp.cleanup()

@@ -48,6 +48,17 @@ PUBLIC_BASE_URL=
 PUBLIC_MEDIA_BASE_URL=
 ```
 
+Optional CORS allow-list:
+
+```env
+ALLOWED_ORIGINS=https://your-frontend-domain.example
+```
+
+`ALLOWED_ORIGINS` is a comma-separated list of origins allowed to call this API
+from the browser. Leave it empty to allow the local dev origins
+(`http://127.0.0.1:3000`, `http://localhost:3000`). Requests served from the
+same origin (the FastAPI app itself) never need CORS.
+
 Model variables are comma-separated. Leave them empty to use the built-in APIMart model lists.
 
 模型列表变量使用英文逗号分隔。留空时会使用项目内置的 APIMart 模型列表。

@@ -15,7 +15,9 @@ import threading
 import uuid
 import datetime
 import hmac
+import logging
 from typing import Any, Dict, List, Optional
+logger = logging.getLogger(__name__)
 
 _DATABASE_URL = str(os.getenv("DATABASE_URL", "")).strip()
 
@@ -50,7 +52,7 @@ def _connect():
         return _conn
     except Exception as exc:
         _init_error = exc
-        print(f"[storage_db] failed to connect to Postgres: {exc}")
+        logger.info(f"[storage_db] failed to connect to Postgres: {exc}")
         return None
 
 
@@ -125,7 +127,7 @@ def _ensure_schema(conn) -> bool:
         _schema_ready = True
         return True
     except Exception as exc:
-        print(f"[storage_db] failed to ensure schema: {exc}")
+        logger.info(f"[storage_db] failed to ensure schema: {exc}")
         return False
 
 
@@ -142,7 +144,7 @@ def kv_get(collection: str, doc_id: str) -> Optional[Dict[str, Any]]:
             row = cur.fetchone()
             return row[0] if row else None
         except Exception as exc:
-            print(f"[storage_db] kv_get failed ({collection}/{doc_id}): {exc}")
+            logger.info(f"[storage_db] kv_get failed ({collection}/{doc_id}): {exc}")
             return None
 
 
@@ -164,7 +166,7 @@ def kv_set(collection: str, doc_id: str, data: Dict[str, Any]) -> bool:
             )
             return True
         except Exception as exc:
-            print(f"[storage_db] kv_set failed ({collection}/{doc_id}): {exc}")
+            logger.info(f"[storage_db] kv_set failed ({collection}/{doc_id}): {exc}")
             return False
 
 
@@ -180,7 +182,7 @@ def kv_delete(collection: str, doc_id: str) -> bool:
             )
             return True
         except Exception as exc:
-            print(f"[storage_db] kv_delete failed ({collection}/{doc_id}): {exc}")
+            logger.info(f"[storage_db] kv_delete failed ({collection}/{doc_id}): {exc}")
             return False
 
 
@@ -196,7 +198,7 @@ def kv_list(collection: str) -> List[Dict[str, Any]]:
             )
             return [row[0] for row in cur.fetchall()]
         except Exception as exc:
-            print(f"[storage_db] kv_list failed ({collection}): {exc}")
+            logger.info(f"[storage_db] kv_list failed ({collection}): {exc}")
             return []
 
 
@@ -285,7 +287,7 @@ def upsert_wechat_user(openid: str, unionid: str = "", nickname: str = "", avata
             )
             return _user_from_row(cur.fetchone())
         except Exception as exc:
-            print(f"[storage_db] upsert_wechat_user failed: {exc}")
+            logger.info(f"[storage_db] upsert_wechat_user failed: {exc}")
             return None
 
 
@@ -322,7 +324,7 @@ def upsert_email_user(email: str) -> Optional[Dict[str, Any]]:
             )
             return _user_from_row(cur.fetchone())
         except Exception as exc:
-            print(f"[storage_db] upsert_email_user failed: {exc}")
+            logger.info(f"[storage_db] upsert_email_user failed: {exc}")
             return None
 
 
@@ -344,7 +346,7 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
             )
             return _user_from_row(cur.fetchone())
         except Exception as exc:
-            print(f"[storage_db] get_user_by_email failed: {exc}")
+            logger.info(f"[storage_db] get_user_by_email failed: {exc}")
             return None
 
 
@@ -394,7 +396,7 @@ def create_email_password_user(email: str, nickname: str, password_hash: str) ->
             )
             return _user_from_row(cur.fetchone())
         except Exception as exc:
-            print(f"[storage_db] create_email_password_user failed: {exc}")
+            logger.info(f"[storage_db] create_email_password_user failed: {exc}")
             return None
 
 
@@ -410,7 +412,7 @@ def mark_user_login(user_id: str) -> bool:
             conn.execute("UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = %s", (user_id,))
             return True
         except Exception as exc:
-            print(f"[storage_db] mark_user_login failed: {exc}")
+            logger.info(f"[storage_db] mark_user_login failed: {exc}")
             return False
 
 
@@ -436,7 +438,7 @@ def create_email_login_code(email: str, code_hash: str, expires_at: datetime.dat
             )
             return True
         except Exception as exc:
-            print(f"[storage_db] create_email_login_code failed: {exc}")
+            logger.info(f"[storage_db] create_email_login_code failed: {exc}")
             return False
 
 
@@ -472,7 +474,7 @@ def consume_email_login_code(email: str, code_hash: str, max_attempts: int = 5) 
             conn.execute("UPDATE email_login_codes SET consumed_at = now() WHERE id = %s", (code_id,))
             return True
         except Exception as exc:
-            print(f"[storage_db] consume_email_login_code failed: {exc}")
+            logger.info(f"[storage_db] consume_email_login_code failed: {exc}")
             return False
 
 
@@ -491,7 +493,7 @@ def create_session(user_id: str, session_hash: str, expires_at: datetime.datetim
             )
             return True
         except Exception as exc:
-            print(f"[storage_db] create_session failed: {exc}")
+            logger.info(f"[storage_db] create_session failed: {exc}")
             return False
 
 
@@ -522,7 +524,7 @@ def get_session(session_hash: str) -> Optional[Dict[str, Any]]:
                 "user": user,
             }
         except Exception as exc:
-            print(f"[storage_db] get_session failed: {exc}")
+            logger.info(f"[storage_db] get_session failed: {exc}")
             return None
 
 
@@ -535,5 +537,5 @@ def delete_session(session_hash: str) -> bool:
             conn.execute("DELETE FROM sessions WHERE session_hash = %s", (session_hash,))
             return True
         except Exception as exc:
-            print(f"[storage_db] delete_session failed: {exc}")
+            logger.info(f"[storage_db] delete_session failed: {exc}")
             return False
