@@ -76,7 +76,8 @@ app.py                  Vercel/FastAPI 入口
 main.py                 后端服务与 API 适配
 static/                 前端页面、画布和素材库
 static/home.html        首页工作台
-static/canvas.html      无限画布
+static/canvas.html      经典画布入口（自动跳转智能画布）
+static/smart-canvas.html 智能画布（唯一画布引擎，含画布管理入口）
 static/asset-manager.html
 requirements.txt        Python 依赖
 vercel.json             Vercel 路由配置

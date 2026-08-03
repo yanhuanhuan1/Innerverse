@@ -1368,3 +1368,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-group-summary i,.smart-group-summary svg { width:13px; height:13px; }
 .smart-group-empty { flex:1 1 auto; min-height:74px; display:flex; align-items:center; justify-content:center; gap:6px; color:var(--faint); font-size:10px; font-weight:700; text-align:center; border-radius:10px; border:1px dashed var(--line); background:var(--soft); }
 .smart-group-empty i,.smart-group-empty svg { width:14px; height:14px; }
+
+/* 经典画布迁移过来的遗留节点（comfy/llm/video/rh 等）以只读卡片展示，数据完整保留 */
+.legacy-node-body { box-sizing:border-box; display:flex; flex-direction:column; gap:8px; padding:10px; overflow:hidden; }
+.legacy-node-badge { align-self:flex-start; padding:2px 8px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:9px; font-weight:800; letter-spacing:.04em; border:1px solid var(--line); }
+.legacy-node-text { color:var(--muted); font-size:10.5px; line-height:1.55; white-space:pre-wrap; overflow:hidden; display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical; }
+.legacy-node-thumbs { display:flex; flex-wrap:wrap; gap:6px; }
+.legacy-node-thumb { width:56px; height:56px; object-fit:cover; border-radius:8px; border:1px solid var(--line); background:var(--soft); }
+.legacy-node-empty { flex:1 1 auto; min-height:48px; display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:10px; font-weight:700; text-align:center; border-radius:10px; border:1px dashed var(--line); background:var(--soft); }

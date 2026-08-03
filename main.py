@@ -188,7 +188,7 @@ def load_app_version():
             return version
     except Exception:
         pass
-    return "2026.07.23"
+    return "2026.08.03"
 
 APP_VERSION = load_app_version()
 GITHUB_REPO_URL = "https://github.com/yanhuanhuan1/Innerverse"
