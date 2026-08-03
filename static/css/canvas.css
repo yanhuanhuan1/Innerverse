@@ -1266,8 +1266,6 @@ body.studio-theme-dark .shell .node.sized.video-node {
 .asset-manager-card-actions button:hover { color:var(--text); border-color:var(--line-2); background:var(--soft-2); }
 .asset-manager-card-actions button.danger { color:#dc2626; }
 .asset-manager-card-actions button:disabled { opacity:.45; cursor:not-allowed; pointer-events:none; }
-.drop-overlay { position:absolute; inset:0; z-index:20; display:none; align-items:center; justify-content:center; color:#64748b; background:rgba(248,250,252,.72); backdrop-filter:blur(2px); font-weight:800; letter-spacing:.16em; pointer-events:none; }
-.drop-overlay.active { display:flex; }
 .create-menu { position:absolute; z-index:40; display:none; width:190px; padding:8px; border-radius:18px; background:rgba(255,255,255,.96); border:1px solid #e8edf3; box-shadow:0 20px 50px rgba(15,23,42,.14); backdrop-filter:blur(16px); }
 .create-menu.open { display:block; }
 .menu-btn { width:100%; height:38px; border-radius:12px; display:flex; align-items:center; gap:9px; padding:0 10px; color:#475569; font-size:12px; font-weight:700; }

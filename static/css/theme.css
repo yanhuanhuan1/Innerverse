@@ -781,13 +781,6 @@ body.studio-theme-dark .shell .port::after {
     box-shadow: 0 0 0 1px rgba(148,163,184,.32) !important;
 }
 
-html.studio-theme-dark body .shell .drop-overlay,
-body.studio-theme-dark .shell .drop-overlay {
-    background: rgba(15,20,29,.44) !important;
-    color: #c8d0dc !important;
-    backdrop-filter: blur(2px) !important;
-}
-
 html.studio-theme-dark body .output-drag-preview,
 body.studio-theme-dark .output-drag-preview,
 .output-drag-preview {

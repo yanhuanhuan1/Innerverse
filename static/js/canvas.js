@@ -4407,14 +4407,14 @@ function allowImageNodeDropEvent(e, highlightEl){
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'copy';
         highlightEl?.classList.add('drag-over');
-        dropOverlay.classList.remove('active');
+        dropOverlay?.classList.remove('active');
     }
 }
 function clearImageNodeDropState(e, highlightEl){
     e.preventDefault();
     e.stopPropagation();
     highlightEl?.classList.remove('drag-over');
-    dropOverlay.classList.remove('active');
+    dropOverlay?.classList.remove('active');
 }
 async function handleImageNodeDropEvent(e, nodeId, highlightEl){
     if(hasOutputImageDrag(e.dataTransfer)){
@@ -6437,7 +6437,8 @@ function isCollapsedGeneratorStageTarget(target){
     return !!target?.closest?.('.node.composer-closed .canvas-gen-stage');
 }
 function isNodeDragSurface(target){
-    return !isNodeControl(target) && !isCollapsedGeneratorStageTarget(target) && !target.closest('.port, .resize-handle, .output-img-wrap');
+    // 预览图不再单独拦截拖拽：在图像上按下并拖动应移动整个节点框。
+    return !isNodeControl(target) && !isCollapsedGeneratorStageTarget(target) && !target.closest('.port, .resize-handle');
 }
 function renderNode(node){
     normalizeApiNodeLayout(node);
@@ -6695,19 +6696,10 @@ function bindOutputWrap(wrap, node){
     const del = wrap.querySelector('.output-del');
     const recoverQuery = wrap.querySelector('.output-recover-query');
     if(img){
-        img.draggable = true;
-        img.ondragstart = e => {
-            e.stopPropagation();
-            img.dataset.dragging = '1';
-            setOutputDragPreview(e, img);
-            e.dataTransfer.effectAllowed = 'copy';
-            e.dataTransfer.setData('application/x-canvas-output-image', img.dataset.url);
-            e.dataTransfer.setData('text/uri-list', img.dataset.url);
-        };
-        img.ondragend = () => setTimeout(() => { delete img.dataset.dragging; }, 0);
+        // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
+        img.draggable = false;
         img.onclick = e => {
             e.stopPropagation();
-            if(img.dataset.dragging) return;
             openOutputLightbox(img.dataset.url, node);
         };
     }
@@ -14099,6 +14091,14 @@ function outputResolutionText(text, meta=null){
     if(meta?.runMs) parts.push(`<span>${formatRunDuration(meta.runMs)}</span>`);
     outputResolution.innerHTML = parts.join('<span style="opacity:.38">|</span>');
 }
+function formatFileSize(bytes){
+    const n = Number(bytes) || 0;
+    if(n <= 0) return '';
+    if(n < 1024) return `${n} B`;
+    if(n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if(n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 function setupOutputPromptPanel(meta){
     currentOutputMeta = meta || null;
     const prompt = meta?.run?.prompt || '';
@@ -14732,9 +14732,24 @@ function openOutputLightbox(url, out){
     outputLightboxImg.draggable = false;
     outputCompareResult.draggable = false;
     outputCompareOriginal.draggable = false;
-    outputLightboxImg.onload = () => {
-        outputResolutionText(`${outputLightboxImg.naturalWidth} x ${outputLightboxImg.naturalHeight}`, meta);
+    // 点击预览窗口显示图像的精度（分辨率）与文件大小。
+    let outputSizeText = '';
+    const applyOutputResolution = () => {
+        const w = outputLightboxImg.naturalWidth;
+        const h = outputLightboxImg.naturalHeight;
+        if(!w || !h) return;
+        outputResolutionText(`${w} x ${h}${outputSizeText ? ` · ${outputSizeText}` : ''}`, meta);
     };
+    outputLightboxImg.onload = () => applyOutputResolution();
+    fetch(canvasDisplayMediaUrl(url, outputDownloadName(url)), {method:'HEAD'})
+        .then(res => {
+            const bytes = Number(res.headers.get('content-length'));
+            if(res.ok && bytes > 0){
+                outputSizeText = formatFileSize(bytes);
+                applyOutputResolution();
+            }
+        })
+        .catch(() => {});
     outputLightboxImg.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
     outputCompareResult.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
     outputCompareOriginal.src = currentOutputCompareUrl ? canvasDisplayMediaUrl(currentOutputCompareUrl, outputDownloadName(currentOutputCompareUrl)) : '';
@@ -16032,56 +16047,12 @@ board.onwheel = e => {
     scheduleViewportSave();
 };
 board.addEventListener('dragover', e => {
-    if(e.target.closest?.('.image-node')){
-        dropOverlay.classList.remove('active');
-        return;
-    }
-    if(isCanvasInputDrag(e.dataTransfer)){
-        dropOverlay.classList.remove('active');
-        return;
-    }
-    if(hasImageDropData(e.dataTransfer) || hasOutputImageDrag(e.dataTransfer)){
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-        dropOverlay.classList.add('active');
-    }
+    // 已取消“拖放素材到画布”：只阻止浏览器默认行为（避免把文件拖进页面时被导航走），不再导入任何内容。
+    if(e.dataTransfer?.types?.length) e.preventDefault();
 });
-board.addEventListener('dragleave', e => {
-    if(e.target === board || !board.contains(e.relatedTarget)) dropOverlay.classList.remove('active');
-});
-board.addEventListener('drop', async e => {
+board.addEventListener('drop', e => {
     e.preventDefault();
-    dropOverlay.classList.remove('active');
-    if(e.target.closest?.('.image-node')) return;
-    if(hasOutputImageDrag(e.dataTransfer)) {
-        createImageCardFromOutput(e.dataTransfer.getData('application/x-canvas-output-image'), screenToWorld(e.clientX, e.clientY));
-        return;
-    }
-    if(Array.from(e.dataTransfer?.types || []).includes('application/x-canvas-asset')){
-        try {
-            const payload = JSON.parse(e.dataTransfer.getData('application/x-canvas-asset') || '{}');
-            if(payload?.url) {
-                if(String(payload.kind || '').toLowerCase() === 'workflow') await importWorkflowAssetUrl(payload.url, payload.name || 'workflow');
-                else createImageCardFromUrl(payload.url, screenToWorld(e.clientX, e.clientY), payload.name || 'asset');
-            }
-        } catch(err) {}
-        return;
-    }
-    if(isCanvasInputDrag(e.dataTransfer)) {
-        internalDrag = false;
-        return;
-    }
-    const payload = await resolveImageDropPayload(e.dataTransfer);
-    if(payload.type === 'none') return;
-    try {
-        await applyImageDropPayloadToBoard(payload, screenToWorld(e.clientX, e.clientY));
-    } catch(err) {
-        setStatus('Ready');
-        showErrorModal(err.message || (langIsEn() ? 'Image import failed' : '导入图片失败'), langIsEn() ? 'Image import failed' : '导入图片失败');
-    }
 });
-window.addEventListener('dragend', () => dropOverlay.classList.remove('active'));
-window.addEventListener('drop', () => dropOverlay.classList.remove('active'));
 window.addEventListener('paste', e => {
     if(!canvas) return;
     const files = [...(e.clipboardData?.items || [])].filter(x => x.kind === 'file' && /^(image|video|audio)\//.test(String(x.type || ''))).map(x => x.getAsFile());
