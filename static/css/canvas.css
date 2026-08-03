@@ -2565,6 +2565,9 @@ body.studio-theme-dark .shell .node.sized.video-node {
     gap:12px;
     overflow:hidden;
 }
+.canvas-video-settings-wrap { position:relative; padding-bottom:104px; }
+.canvas-video-toggle-tokens { position:relative; display:flex; flex-wrap:wrap; gap:6px; padding:10px 0 0; }
+.canvas-video-toggle-token { font-size:12px !important; height:34px !important; padding:0 12px !important; }
 .canvas-gen-option-divider {
     flex:0 0 1px;
     width:1px;

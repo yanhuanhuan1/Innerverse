@@ -8930,50 +8930,11 @@ function renderVideoBody(node){
                     <button type="button" class="canvas-gen-panel-close" data-close-composer title="${langIsEn() ? 'Collapse' : '收起'}"><i data-lucide="x" class="w-4 h-4"></i></button>
                 </div>
                 <div class="prompt-list"></div>
-                <div class="gen-settings canvas-video-settings">
-                    <div class="gen-settings-row canvas-video-prompt-row">
-                        <label class="field" style="flex:1"><div class="setting-title">Prompt</div><textarea class="setting-input video-prompt" data-field="prompt" placeholder="${langIsEn() ? 'Describe the video you want to generate' : '描述任何你想生成的视频内容'}">${escapeHtml(node.prompt || '')}</textarea></label>
+                <div class="gen-settings comfy-settings canvas-video-settings-wrap">
+                    <div class="canvas-gen-prompt-card">
+                        <textarea class="setting-input canvas-gen-prompt-input video-prompt" data-field="prompt" placeholder="${langIsEn() ? 'Describe the video you want to generate' : '描述任何你想生成的视频内容'}">${escapeHtml(node.prompt || '')}</textarea>
                     </div>
-                    <div class="gen-settings-row canvas-video-select-row">
-                        <select class="select-lite video-provider">${videoProviderOptions(node.apiProvider)}</select>
-                        <select class="select-lite video-model">${videoModelOptions(node.model, node.apiProvider)}</select>
-                    </div>
-                    <div class="gen-settings-row canvas-video-param-row">
-                        <label class="field">
-                            <div class="setting-title">${tr('canvas.videoDuration')}</div>
-                            <input class="setting-input video-duration" type="number" min="1" max="60" step="1" value="${Number(node.duration || 5)}">
-                        </label>
-                        <label class="field">
-                            <div class="setting-title">${tr('canvas.videoAspect')}</div>
-                            <select class="select-lite video-aspect compact-select">
-                                <option value="16:9">16:9</option>
-                                <option value="9:16">9:16</option>
-                                <option value="1:1">1:1</option>
-                                <option value="4:3">4:3</option>
-                                <option value="3:4">3:4</option>
-                                <option value="21:9">21:9</option>
-                                <option value="9:21">9:21</option>
-                                <option value="keep_ratio">keep</option>
-                                <option value="adaptive">adapt</option>
-                            </select>
-                        </label>
-                        <label class="field">
-                            <div class="setting-title">${tr('canvas.videoResolution')}</div>
-                            <select class="select-lite video-resolution compact-select">
-                                <option value="">Auto</option>
-                                <option value="480p">480p</option>
-                                <option value="720p">720p</option>
-                                <option value="1080p">1080p</option>
-                                <option value="780P">780P</option>
-                            </select>
-                        </label>
-                    </div>
-                    <div class="gen-settings-row canvas-video-toggle-row">
-                        <button type="button" class="setting-check ${node.enhancePrompt ? 'active' : ''}" data-video-toggle="enhancePrompt"><span class="check-dot"></span>${tr('canvas.videoEnhancePrompt')}</button>
-                        <button type="button" class="setting-check ${node.enableUpsample ? 'active' : ''}" data-video-toggle="enableUpsample"><span class="check-dot"></span>${tr('canvas.videoUpsample')}</button>
-                        <button type="button" class="setting-check ${node.generateAudio ? 'active' : ''}" data-video-toggle="generateAudio"><span class="check-dot"></span>${tr('canvas.videoGenerateAudio')}</button>
-                        <button type="button" class="setting-check ${node.multimodal ? 'active' : ''}" data-video-toggle="multimodal"><span class="check-dot"></span>${tr('canvas.videoMultimodal')}</button>
-                    </div>
+                    ${canvasVideoOptionBar(node)}
                 </div>
                 <div class="canvas-gen-bottom">
                     ${canvasComposerRunButtonHtml(node, 'video-run')}
@@ -8986,14 +8947,8 @@ function renderVideoBody(node){
     const providerSelect = wrap.querySelector('.video-provider');
     const modelSelect = wrap.querySelector('.video-model');
     const promptInput = wrap.querySelector('.video-prompt');
-    const durationSelect = wrap.querySelector('.video-duration');
-    const aspectSelect = wrap.querySelector('.video-aspect');
-    const resolutionSelect = wrap.querySelector('.video-resolution');
     providerSelect.value = node.apiProvider;
-    durationSelect.value = String(node.duration || 5);
-    aspectSelect.value = node.aspectRatio || '16:9';
-    resolutionSelect.value = node.resolution || '';
-    [promptInput, providerSelect, modelSelect, durationSelect, aspectSelect, resolutionSelect].forEach(input => {
+    [promptInput, providerSelect, modelSelect].forEach(input => {
         input.onmousedown = e => e.stopPropagation();
         input.onclick = e => e.stopPropagation();
     });
@@ -9007,10 +8962,14 @@ function renderVideoBody(node){
         scheduleSave();
     };
     modelSelect.onchange = e => { e.stopPropagation(); node.model = e.target.value; scheduleSave(); };
-    durationSelect.oninput = e => { e.stopPropagation(); node.duration = Math.max(1, Math.min(60, Number(e.target.value || 5))); scheduleSave(); };
-    durationSelect.onblur = e => { e.target.value = String(Math.max(1, Math.min(60, Number(node.duration || 5)))); };
-    aspectSelect.onchange = e => { e.stopPropagation(); node.aspectRatio = e.target.value; scheduleSave(); };
-    resolutionSelect.onchange = e => { e.stopPropagation(); node.resolution = e.target.value; scheduleSave(); };
+    wrap.querySelectorAll('[data-video-duration], [data-video-aspect], [data-video-resolution]').forEach(btn => {
+        btn.onmousedown = e => e.stopPropagation();
+        btn.onclick = e => {
+            e.stopPropagation();
+            const kind = btn.dataset.videoDuration ? 'video-duration' : btn.dataset.videoAspect ? 'video-aspect' : 'video-resolution';
+            selectVideoComposerOption(node.id, kind, btn.dataset.videoDuration || btn.dataset.videoAspect || btn.dataset.videoResolution || '');
+        };
+    });
     wrap.querySelectorAll('[data-video-toggle]').forEach(btn => {
         btn.onmousedown = e => e.stopPropagation();
         btn.onclick = e => {
@@ -9053,6 +9012,8 @@ function renderVideoBody(node){
         renderVideoImageInputs(stageContent.querySelector('.video-img-list'), node, mediaInputs);
     }
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
+    const videoSettings = wrap.querySelector('.comfy-settings');
+    if(videoSettings) bindCanvasComposerOptionBar(videoSettings, node);
     wrap.querySelector('.video-run').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
     bindCascadeButtons(wrap, node.id);
     bindCanvasInputPanelToggle(wrap, node);
@@ -10905,6 +10866,99 @@ function canvasComposerOptionBar(node){
         </div>
     `;
 }
+// ---- 视频节点：与文生图（comfy）同款的控件条 ----
+function canvasVideoOptionBar(node){
+    const count = Math.max(1, Math.min(8, Number(node?.count || 1)));
+    const modelLabel = canvasComposerShortLabel(node.model || 'Video');
+    const durationLabel = `${Number(node.duration || 5)}s`;
+    const aspectLabel = node.aspectRatio || '16:9';
+    const resolutionLabel = node.resolution || 'Auto';
+    return `
+        ${canvasVideoModelPopoverHtml(node)}
+        ${canvasVideoDurationPopoverHtml(node)}
+        ${canvasVideoAspectPopoverHtml(node)}
+        ${canvasVideoResolutionPopoverHtml(node)}
+        ${canvasComposerCountPopoverHtml(node)}
+        <div class="canvas-gen-options-row">
+            <button type="button" class="canvas-gen-token ${canvasComposerPopoverIsOpen(node, 'video-model') ? 'active' : ''}" data-composer-popup="video-model" title="${escapeAttr(modelLabel)}">
+                <i data-lucide="clapperboard" class="w-4 h-4"></i>
+                <span class="canvas-gen-token-label">${escapeHtml(modelLabel)}</span>
+            </button>
+            <span class="canvas-gen-option-divider"></span>
+            <button type="button" class="canvas-gen-token ${canvasComposerPopoverIsOpen(node, 'video-duration') ? 'active' : ''}" data-composer-popup="video-duration" title="${escapeAttr(durationLabel)}">
+                <i data-lucide="timer" class="w-4 h-4"></i>
+                <span class="canvas-gen-token-label">${escapeHtml(durationLabel)}</span>
+            </button>
+            <span class="canvas-gen-option-divider"></span>
+            <button type="button" class="canvas-gen-token ${canvasComposerPopoverIsOpen(node, 'video-aspect') ? 'active' : ''}" data-composer-popup="video-aspect" title="${escapeAttr(aspectLabel)}">
+                <i data-lucide="scan" class="w-4 h-4"></i>
+                <span class="canvas-gen-token-label">${escapeHtml(aspectLabel)}</span>
+            </button>
+            <span class="canvas-gen-option-divider"></span>
+            <button type="button" class="canvas-gen-token ${canvasComposerPopoverIsOpen(node, 'video-resolution') ? 'active' : ''}" data-composer-popup="video-resolution" title="${escapeAttr(resolutionLabel)}">
+                <i data-lucide="maximize" class="w-4 h-4"></i>
+                <span class="canvas-gen-token-label">${escapeHtml(resolutionLabel)}</span>
+            </button>
+            <button type="button" class="canvas-gen-token canvas-gen-count-cycle ${canvasComposerPopoverIsOpen(node, 'count') ? 'active' : ''}" data-composer-popup="count" data-count-cycle title="${langIsEn() ? 'Generation count' : '生成数量'}">${count}&times;</button>
+        </div>
+        <div class="canvas-video-toggle-tokens">
+            ${canvasVideoToggleTokenHtml(node, 'enhancePrompt', tr('canvas.videoEnhancePrompt'))}
+            ${canvasVideoToggleTokenHtml(node, 'enableUpsample', tr('canvas.videoUpsample'))}
+            ${canvasVideoToggleTokenHtml(node, 'generateAudio', tr('canvas.videoGenerateAudio'))}
+            ${canvasVideoToggleTokenHtml(node, 'multimodal', tr('canvas.videoMultimodal'))}
+        </div>
+    `;
+}
+function canvasVideoToggleTokenHtml(node, field, label){
+    const active = Boolean(node[field]);
+    return `<button type="button" class="canvas-gen-token canvas-video-toggle-token ${active ? 'active' : ''}" data-video-toggle="${field}"><i data-lucide="${active ? 'check' : 'circle'}" class="w-3.5 h-3.5"></i><span class="canvas-gen-token-label">${escapeHtml(label)}</span></button>`;
+}
+function canvasVideoModelPopoverHtml(node){
+    return `<div class="canvas-gen-popover canvas-gen-model-popover" data-composer-popover="video-model" ${canvasComposerPopoverIsOpen(node, 'video-model') ? '' : 'hidden'}>
+        <div class="canvas-gen-popover-title">${langIsEn() ? 'Provider' : '平台'}</div>
+        <select class="select-lite video-provider">${videoProviderOptions(node.apiProvider)}</select>
+        <div class="canvas-gen-popover-title" style="margin-top:10px">${langIsEn() ? 'Model' : '模型'}</div>
+        <select class="select-lite video-model">${videoModelOptions(node.model, node.apiProvider)}</select>
+    </div>`;
+}
+function canvasVideoDurationPopoverHtml(node){
+    const durations = [3, 5, 8, 10, 15, 30, 60];
+    return `<div class="canvas-gen-popover canvas-gen-quality-popover" data-composer-popover="video-duration" ${canvasComposerPopoverIsOpen(node, 'video-duration') ? '' : 'hidden'}>
+        <div class="canvas-gen-popover-title">${tr('canvas.videoDuration')}</div>
+        <div class="canvas-gen-quality-seg">
+            ${durations.map(d => `<button type="button" class="${Number(node.duration || 5) === d ? 'active' : ''}" data-video-duration="${d}">${d}s</button>`).join('')}
+        </div>
+    </div>`;
+}
+function canvasVideoAspectPopoverHtml(node){
+    const aspects = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', 'keep_ratio', 'adaptive'];
+    const shapes = {'16:9':'wide', '9:16':'portrait', '1:1':'square', '4:3':'landscape', '3:4':'portrait', '21:9':'wide', '9:21':'portrait'};
+    return `<div class="canvas-gen-popover canvas-gen-quality-popover" data-composer-popover="video-aspect" ${canvasComposerPopoverIsOpen(node, 'video-aspect') ? '' : 'hidden'}>
+        <div class="canvas-gen-popover-title">${tr('canvas.videoAspect')}</div>
+        <div class="canvas-gen-ratio-grid">
+            ${aspects.map(a => `<button type="button" class="${(node.aspectRatio || '16:9') === a ? 'active' : ''}" data-video-aspect="${escapeAttr(a)}">${shapes[a] ? `<span class="ratio-shape ${shapes[a]}"></span>` : ''}<span>${escapeHtml(a)}</span></button>`).join('')}
+        </div>
+    </div>`;
+}
+function canvasVideoResolutionPopoverHtml(node){
+    const resolutions = ['', '480p', '720p', '1080p'];
+    return `<div class="canvas-gen-popover canvas-gen-quality-popover" data-composer-popover="video-resolution" ${canvasComposerPopoverIsOpen(node, 'video-resolution') ? '' : 'hidden'}>
+        <div class="canvas-gen-popover-title">${tr('canvas.videoResolution')}</div>
+        <div class="canvas-gen-quality-seg">
+            ${resolutions.map(r => `<button type="button" class="${(node.resolution || '') === r ? 'active' : ''}" data-video-resolution="${escapeAttr(r)}">${r ? escapeHtml(r) : 'Auto'}</button>`).join('')}
+        </div>
+    </div>`;
+}
+function selectVideoComposerOption(nodeId, kind, value){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node) return;
+    if(kind === 'video-duration') node.duration = Math.max(1, Math.min(120, Number(value) || 5));
+    else if(kind === 'video-aspect') node.aspectRatio = value;
+    else if(kind === 'video-resolution') node.resolution = value;
+    canvasComposerPopover = {nodeId:'', kind:''};
+    scheduleSave();
+    refreshNodes([node.id]);
+}
 function syncCanvasComposerOptionBar(node){
     if(!node?.id || !nodesEl) return false;
     const el = nodesEl.querySelector(`.node[data-id="${CSS.escape(node.id)}"]`);
@@ -10958,7 +11012,15 @@ function syncCanvasComposerOptionBar(node){
     } else if(freshCountPop) {
         container.insertBefore(freshCountPop, container.querySelector(':scope > .canvas-gen-options-row'));
     }
+    // 视频节点弹层：与 comfy 弹层走同一套显隐状态
+    container.querySelectorAll('[data-composer-popover^="video-"]').forEach(pop => {
+        pop.hidden = !canvasComposerPopoverIsOpen(node, pop.dataset.composerPopover);
+    });
     const row = container.querySelector(':scope > .canvas-gen-options-row');
+    ['video-model', 'video-duration', 'video-aspect', 'video-resolution'].forEach(kind => {
+        const btn = row?.querySelector(`[data-composer-popup="${kind}"]`);
+        if(btn) btn.classList.toggle('active', canvasComposerPopoverIsOpen(node, kind));
+    });
     const model = canvasComposerActiveModel(node);
     const modelLabel = canvasComposerModelLabel(node);
     const modelBtn = row?.querySelector('[data-composer-popup="model"]');
@@ -11002,12 +11064,24 @@ function syncCanvasComposerOptionBar(node){
         countBtn.classList.toggle('active', canvasComposerPopoverIsOpen(node, 'count'));
         countBtn.innerHTML = `${count}&times;`;
     }
+    const videoModelLabel = row?.querySelector('[data-composer-popup="video-model"] .canvas-gen-token-label');
+    if(videoModelLabel) videoModelLabel.textContent = canvasComposerShortLabel(node.model || 'Video');
+    const videoDurationLabel = row?.querySelector('[data-composer-popup="video-duration"] .canvas-gen-token-label');
+    if(videoDurationLabel) videoDurationLabel.textContent = `${Number(node.duration || 5)}s`;
+    const videoAspectLabel = row?.querySelector('[data-composer-popup="video-aspect"] .canvas-gen-token-label');
+    if(videoAspectLabel) videoAspectLabel.textContent = node.aspectRatio || '16:9';
+    const videoResLabel = row?.querySelector('[data-composer-popup="video-resolution"] .canvas-gen-token-label');
+    if(videoResLabel) videoResLabel.textContent = node.resolution || 'Auto';
     const runCost = el.querySelector('.canvas-gen-cost');
     if(runCost) runCost.innerHTML = `<i data-lucide="atom" class="w-4 h-4"></i>${Math.max(1, count) * 20}`;
     syncCanvasComposerPopoverState(container, node);
     positionCanvasComposerPopoverOverToken(container, 'style', '[data-composer-popup="style"]');
     positionCanvasComposerPopoverOverToken(container, 'camera', '[data-composer-popup="camera"]');
     positionCanvasComposerPopoverOverToken(container, 'count', '[data-count-cycle]');
+    positionCanvasComposerPopoverOverToken(container, 'video-model', '[data-composer-popup="video-model"]');
+    positionCanvasComposerPopoverOverToken(container, 'video-duration', '[data-composer-popup="video-duration"]');
+    positionCanvasComposerPopoverOverToken(container, 'video-aspect', '[data-composer-popup="video-aspect"]');
+    positionCanvasComposerPopoverOverToken(container, 'video-resolution', '[data-composer-popup="video-resolution"]');
     bindCanvasComposerOptionBar(container, node);
     refreshIcons();
     return true;
