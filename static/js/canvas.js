@@ -382,6 +382,7 @@ let linkCreateState = null;
 let internalDrag = false;
 let selected = new Set();
 let canvasComposerPopover = {nodeId:'', kind:''};
+let suppressNextNodeClick = false;
 let saveTimer = null;
 let creatingCanvas = false;
 let createCanvasKind = 'classic';
@@ -6434,82 +6435,13 @@ function destroyLTXEditor(node){
     node._ltxEditor = null;
 }
 function isCollapsedGeneratorStageTarget(target){
+    // 生成图所在区域不视为“折叠面板目标”，保证从图片上也能直接拖拽节点。
+    if(target?.closest?.('.output-img-wrap')) return false;
     return !!target?.closest?.('.node.composer-closed .canvas-gen-stage');
 }
 function isNodeDragSurface(target){
     // 预览图不再单独拦截拖拽：在图像上按下并拖动应移动整个节点框。
     return !isNodeControl(target) && !isCollapsedGeneratorStageTarget(target) && !target.closest('.port, .resize-handle');
-}
-function nodeOutputMediaUrls(node){
-    const urls = [];
-    for(const item of (node.generatedOutputs || node.images || [])){
-        const url = outputUrlValue(item);
-        if(url) urls.push(url);
-    }
-    if(!urls.length && node.url) urls.push(node.url);
-    return urls;
-}
-function hasNodeOutputMedia(node){
-    return nodeOutputMediaUrls(node).length > 0;
-}
-function nodeOutputPanelHtml(open){
-    return `<div class="node-output-panel ${open ? 'is-open' : ''}">
-        <div class="node-output-panel-bar">
-            <button class="node-output-panel-btn" type="button" data-output-action="zoom" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button>
-            <button class="node-output-panel-btn" type="button" data-output-action="download" title="${escapeHtml(tr('canvas.download'))}"><i data-lucide="download"></i></button>
-            <span class="node-output-panel-spacer"></span>
-            <span class="node-output-panel-res" data-output-res>--</span>
-            <button class="node-output-panel-btn" type="button" data-output-action="close" title="${escapeHtml(tr('common.close'))}"><i data-lucide="x"></i></button>
-        </div>
-        <div class="node-output-panel-body"></div>
-    </div>`;
-}
-function bindNodeOutputPanel(panel, node){
-    const body = panel.querySelector('.node-output-panel-body');
-    const resEl = panel.querySelector('[data-output-res]');
-    const urls = nodeOutputMediaUrls(node);
-    if(body && urls.length){
-        const img = document.createElement('img');
-        img.className = 'node-output-panel-img';
-        img.alt = '';
-        img.draggable = false;
-        img.src = canvasDisplayMediaUrl(urls[0]);
-        img.onload = () => {
-            if(resEl && img.naturalWidth && img.naturalHeight) resEl.textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
-        };
-        body.appendChild(img);
-    }
-    panel.addEventListener('click', e => {
-        const btn = e.target.closest('[data-output-action]');
-        if(!btn) return;
-        e.stopPropagation();
-        const action = btn.dataset.outputAction;
-        if(action === 'zoom'){
-            if(urls.length) openOutputLightbox(urls[0], node);
-        } else if(btn.dataset.outputAction === 'download'){
-            if(urls.length) downloadUrl(urls[0], outputDownloadName(urls[0])).catch(err => alert(err.message || (langIsEn() ? 'Download failed' : '下载失败')));
-        } else if(action === 'close'){
-            outputPanelNodeId = '';
-            refreshNodes([node.id]);
-        }
-    }, true);
-}
-// 输出框：点击生成图时在节点下方弹出输出面板（与输入框 composer 同一交互模式）。
-let outputPanelNodeId = '';
-function toggleNodeOutputPanel(node){
-    if(!node) return;
-    if(outputPanelNodeId === node.id){
-        outputPanelNodeId = '';
-        refreshNodes([node.id]);
-        return;
-    }
-    if(outputPanelNodeId) outputPanelNodeId = '';
-    outputPanelNodeId = node.id;
-    selected.clear();
-    selected.add(node.id);
-    refreshSelectionVisuals();
-    refreshNodes([node.id]);
-    scheduleSave();
 }
 function renderNode(node){
     normalizeApiNodeLayout(node);
@@ -6697,16 +6629,6 @@ function renderNode(node){
     if(node.type === 'comfy') body.appendChild(renderComfyBody(node));
     if(node.type === 'ltxDirector') body.appendChild(renderLTXDirectorBody(node));
     el.appendChild(body);
-    // 输出框：点击生成图时在节点下方弹出输出面板（放大 / 下载 / 分辨率 / 关闭）。
-    if(CANVAS_MEDIA_OUTPUT_TYPES.includes(node.type) && hasNodeOutputMedia(node)){
-        const panelOpen = outputPanelNodeId === node.id;
-        el.insertAdjacentHTML('beforeend', nodeOutputPanelHtml(panelOpen));
-        if(panelOpen){
-            const panel = el.querySelector('.node-output-panel');
-            if(panel) bindNodeOutputPanel(panel, node);
-        }
-        el.classList.toggle('output-panel-open', panelOpen);
-    }
     el.querySelectorAll('button, select, textarea, input').forEach(control => {
         control.addEventListener('mousedown', e => e.stopPropagation(), true);
         control.addEventListener('click', e => e.stopPropagation());
@@ -6778,12 +6700,8 @@ function bindOutputWrap(wrap, node){
     const recoverQuery = wrap.querySelector('.output-recover-query');
     if(img){
         // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
-        // 点击生成图：弹出节点下方的输出面板（放大 / 下载等），不再直接打开大图。
+        // 点击生成图不再单独处理：与点击节点其它区域一致（冒泡到节点/舞台的点击逻辑）。
         img.draggable = false;
-        img.onclick = e => {
-            e.stopPropagation();
-            toggleNodeOutputPanel(node);
-        };
     }
     wrap.addEventListener('click', e => {
         const fallbackVideo = e.target.closest?.('video[data-output-video-fallback]');
@@ -9398,12 +9316,19 @@ function bindCanvasInputPanelToggle(wrap, node){
         window.addEventListener('mouseup', up, true);
     }, true);
     stage?.addEventListener('click', event => {
+        if(suppressNextNodeClick) {
+            suppressNextNodeClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
         if(suppressNextStageClick) {
             event.preventDefault();
             event.stopPropagation();
             return;
         }
-        if(event.target.closest('button, .output-img-wrap, audio, video, input, select, textarea')) return;
+        // 生成图区域与节点其它区域一致：点击同样弹出输入面板。
+        if(event.target.closest('button, audio, video, input, select, textarea')) return;
         openCanvasInputPanel(node.id, event);
     });
     const closeBtn = wrap.querySelector('[data-close-composer]');
@@ -15534,11 +15459,17 @@ function sanitizeConnections(){
 function endDrag(event=null){
     const hadContentDrag = Boolean(dragNode || resizeNode || llmPaneDrag || knifeChanged || tempLink);
     const hadViewportDrag = Boolean(dragBoard || minimapDrag);
+    const draggedNode = Boolean(dragNode);
     if(dragNode){
         const moved = [dragNode.node, ...(dragNode.children || []).map(c => c.node)].filter(Boolean);
         // 拖动 group/promptGroup 自身时不重新评估（成员跟着一起走，包含关系不变）
         const draggedGroup = moved.some(n => n.type === 'group' || n.type === 'promptGroup');
         if(!draggedGroup) updateGroupMembership(moved);
+    }
+    // 拖完节点后抑制紧随其后的“幽灵点击”，避免误触发舞台点击（例如生成图拖动后弹出面板）。
+    if(hadContentDrag && draggedNode){
+        suppressNextNodeClick = true;
+        setTimeout(() => { suppressNextNodeClick = false; }, 0);
     }
     dragNode = null;
     dragBoard = null;

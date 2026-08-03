@@ -294,7 +294,6 @@
         "canvas.deleteModel": { zh: "删除模型", en: "Delete model" },
         "canvas.deleteLink": { zh: "删除连线", en: "Delete link" },
         "canvas.download": { zh: "下载", en: "Download" },
-        "canvas.enlarge": { zh: "放大", en: "Enlarge" },
         "canvas.comfyModeText": { zh: "文生图", en: "Text to Image" },
         "canvas.comfyModeEnhance": { zh: "细节增强", en: "Detail Enhance" },
         "canvas.comfyModeEdit": { zh: "图片编辑", en: "Image Edit" },
