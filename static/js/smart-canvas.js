@@ -67,6 +67,12 @@ const promptTemplateLibrarySelect = document.getElementById('promptTemplateLibra
 const promptTemplateCats = document.getElementById('promptTemplateCats');
 const promptTemplateBody = document.getElementById('promptTemplateBody');
 const composerTemplateBtn = document.getElementById('composerTemplateBtn');
+function isAuthResponse(res){
+    return res && (res.status === 401 || res.status === 403);
+}
+function redirectToLogin(){
+    window.location.href = '/';
+}
 function scrollComposerPopoverWithWheel(event){
     const scroller = event.target?.closest?.('.composer .model-list, .composer .direct-picker-col, .composer .rh-config-list, .composer .rh-param-list');
     if(!scroller) return false;
@@ -5374,6 +5380,11 @@ async function mergeReloadCanvasNow(){
     }
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
+        if(isAuthResponse(res)){
+            toast('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(!res.ok) return;
         const data = await res.json();
         if(data && data.canvas) applyMergedServerCanvas(data.canvas);
@@ -6000,6 +6011,11 @@ async function saveCanvas(){
                 client_id:smartClientId
             })
         });
+        if(isAuthResponse(res)){
+            toast('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(res.ok){
             const data = await res.json();
             if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;

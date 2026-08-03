@@ -8,6 +8,29 @@ Innerverse can run locally with the existing Windows scripts, and can also be de
 
 Set these in **Vercel Project Settings -> Environment Variables**.
 
+Required for production:
+
+```env
+DATABASE_URL=your_neon_postgres_url
+APIMART_API_KEY=your_apimart_key
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=your_resend_api_key
+EMAIL_FROM=方寸万象 <no-reply@your-domain.com>
+PUBLIC_BASE_URL=https://your-domain.com
+AUTH_SESSION_SECRET=generate_a_long_random_secret
+AUTH_COOKIE_SECURE=true
+```
+
+Optional R2 media storage:
+
+```env
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+R2_PUBLIC_BASE_URL=
+```
+
 必填：
 
 ```env
@@ -41,6 +64,19 @@ After the first deployment, set `PUBLIC_BASE_URL` to your production URL if an u
 4. Add the environment variables above.
 5. Deploy.
 6. Open `/api/health` to confirm the runtime and APIMart configuration.
+
+## Email Login Setup
+
+1. Verify your production sending domain in Resend, for example `innerverse.top`.
+2. Set `EMAIL_FROM` to an address on that verified domain, for example `方寸万象 <no-reply@innerverse.top>`.
+3. Set `RESEND_API_KEY` in Vercel. Do not expose it in frontend code.
+4. Set `AUTH_SESSION_SECRET` to a long random value. You can generate one with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+After login, projects, canvases, and canvas generation tasks are scoped by the email user id stored in Neon/Postgres.
 
 ## Local Development
 

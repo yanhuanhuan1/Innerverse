@@ -12,6 +12,9 @@ callers should always check that first and use the local-file path instead.
 import os
 import json
 import threading
+import uuid
+import datetime
+import hmac
 from typing import Any, Dict, List, Optional
 
 _DATABASE_URL = str(os.getenv("DATABASE_URL", "")).strip()
@@ -67,6 +70,56 @@ def _ensure_schema(conn) -> bool:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE,
+                wechat_openid TEXT UNIQUE,
+                wechat_unionid TEXT UNIQUE,
+                provider TEXT NOT NULL DEFAULT 'email',
+                nickname TEXT NOT NULL DEFAULT '',
+                avatar_url TEXT NOT NULL DEFAULT '',
+                raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_login_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT UNIQUE")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'email'")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_login_codes (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                consumed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                ip TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                session_hash TEXT NOT NULL UNIQUE,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                user_agent TEXT NOT NULL DEFAULT '',
+                ip TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(session_hash)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_login_codes_email ON email_login_codes(email)")
         _schema_ready = True
         return True
     except Exception as exc:
@@ -143,3 +196,253 @@ def kv_list(collection: str) -> List[Dict[str, Any]]:
         except Exception as exc:
             print(f"[storage_db] kv_list failed ({collection}): {exc}")
             return []
+
+
+def _json_payload(data: Dict[str, Any]) -> str:
+    return json.dumps(data or {}, ensure_ascii=False, default=str)
+
+
+def _user_from_row(row) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    if len(row) >= 11:
+        return {
+            "id": row[0],
+            "email": row[1] or "",
+            "wechat_openid": row[2] or "",
+            "wechat_unionid": row[3] or "",
+            "provider": row[4] or "",
+            "nickname": row[5] or "",
+            "avatar_url": row[6] or "",
+            "raw": row[7] if isinstance(row[7], dict) else {},
+            "created_at": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8],
+            "updated_at": row[9].isoformat() if hasattr(row[9], "isoformat") else row[9],
+            "last_login_at": row[10].isoformat() if hasattr(row[10], "isoformat") else row[10],
+        }
+    return {
+        "id": row[0],
+        "email": "",
+        "wechat_openid": row[1] or "",
+        "wechat_unionid": row[2] or "",
+        "provider": "wechat",
+        "nickname": row[3] or "",
+        "avatar_url": row[4] or "",
+        "raw": row[5] if isinstance(row[5], dict) else {},
+        "created_at": row[6].isoformat() if hasattr(row[6], "isoformat") else row[6],
+        "updated_at": row[7].isoformat() if hasattr(row[7], "isoformat") else row[7],
+        "last_login_at": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8],
+    }
+
+
+def upsert_wechat_user(openid: str, unionid: str = "", nickname: str = "", avatar_url: str = "", raw: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    openid = str(openid or "").strip()
+    unionid = str(unionid or "").strip() or None
+    if not openid:
+        return None
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users
+                WHERE wechat_openid = %s OR (%s IS NOT NULL AND wechat_unionid = %s)
+                LIMIT 1
+                """,
+                (openid, unionid, unionid),
+            )
+            row = cur.fetchone()
+            user_id = row[0] if row else uuid.uuid4().hex
+            payload = _json_payload(raw or {})
+            conn.execute(
+                """
+                INSERT INTO users (id, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at)
+                VALUES (%s, %s, %s, 'wechat', %s, %s, %s::jsonb, now(), now(), now())
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    wechat_openid = EXCLUDED.wechat_openid,
+                    wechat_unionid = COALESCE(EXCLUDED.wechat_unionid, users.wechat_unionid),
+                    provider = EXCLUDED.provider,
+                    nickname = EXCLUDED.nickname,
+                    avatar_url = EXCLUDED.avatar_url,
+                    raw = EXCLUDED.raw,
+                    updated_at = now(),
+                    last_login_at = now()
+                """,
+                (user_id, openid, unionid, str(nickname or "")[:120], str(avatar_url or "")[:1000], payload),
+            )
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users WHERE id = %s
+                """,
+                (user_id,),
+            )
+            return _user_from_row(cur.fetchone())
+        except Exception as exc:
+            print(f"[storage_db] upsert_wechat_user failed: {exc}")
+            return None
+
+
+def upsert_email_user(email: str) -> Optional[Dict[str, Any]]:
+    email = str(email or "").strip().lower()
+    if not email:
+        return None
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            user_id = uuid.uuid4().hex
+            nickname = email.split("@", 1)[0][:80] or "User"
+            conn.execute(
+                """
+                INSERT INTO users (id, email, provider, nickname, raw, created_at, updated_at, last_login_at)
+                VALUES (%s, %s, 'email', %s, %s::jsonb, now(), now(), now())
+                ON CONFLICT (email)
+                DO UPDATE SET
+                    provider = 'email',
+                    nickname = COALESCE(NULLIF(users.nickname, ''), EXCLUDED.nickname),
+                    updated_at = now(),
+                    last_login_at = now()
+                """,
+                (user_id, email, nickname, _json_payload({"provider": "email"})),
+            )
+            cur = conn.execute(
+                """
+                SELECT id, email, wechat_openid, wechat_unionid, provider, nickname, avatar_url, raw, created_at, updated_at, last_login_at
+                FROM users WHERE email = %s
+                """,
+                (email,),
+            )
+            return _user_from_row(cur.fetchone())
+        except Exception as exc:
+            print(f"[storage_db] upsert_email_user failed: {exc}")
+            return None
+
+
+def create_email_login_code(email: str, code_hash: str, expires_at: datetime.datetime, ip: str = "", user_agent: str = "") -> bool:
+    email = str(email or "").strip().lower()
+    if not email or not code_hash:
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            conn.execute(
+                "UPDATE email_login_codes SET consumed_at = now() WHERE email = %s AND consumed_at IS NULL",
+                (email,),
+            )
+            conn.execute(
+                """
+                INSERT INTO email_login_codes (id, email, code_hash, expires_at, ip, user_agent)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (uuid.uuid4().hex, email, code_hash, expires_at, str(ip or "")[:80], str(user_agent or "")[:500]),
+            )
+            return True
+        except Exception as exc:
+            print(f"[storage_db] create_email_login_code failed: {exc}")
+            return False
+
+
+def consume_email_login_code(email: str, code_hash: str, max_attempts: int = 5) -> bool:
+    email = str(email or "").strip().lower()
+    if not email or not code_hash:
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, code_hash, attempts
+                FROM email_login_codes
+                WHERE email = %s AND consumed_at IS NULL AND expires_at > now()
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (email,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            code_id, expected_hash, attempts = row[0], row[1], int(row[2] or 0)
+            if attempts >= max_attempts:
+                conn.execute("UPDATE email_login_codes SET consumed_at = now() WHERE id = %s", (code_id,))
+                return False
+            if not hmac.compare_digest(str(expected_hash), str(code_hash)):
+                conn.execute("UPDATE email_login_codes SET attempts = attempts + 1 WHERE id = %s", (code_id,))
+                return False
+            conn.execute("UPDATE email_login_codes SET consumed_at = now() WHERE id = %s", (code_id,))
+            return True
+        except Exception as exc:
+            print(f"[storage_db] consume_email_login_code failed: {exc}")
+            return False
+
+
+def create_session(user_id: str, session_hash: str, expires_at: datetime.datetime, user_agent: str = "", ip: str = "") -> bool:
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            conn.execute(
+                """
+                INSERT INTO sessions (id, user_id, session_hash, expires_at, user_agent, ip)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (uuid.uuid4().hex, user_id, session_hash, expires_at, str(user_agent or "")[:500], str(ip or "")[:80]),
+            )
+            return True
+        except Exception as exc:
+            print(f"[storage_db] create_session failed: {exc}")
+            return False
+
+
+def get_session(session_hash: str) -> Optional[Dict[str, Any]]:
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            cur = conn.execute(
+                """
+                SELECT s.id, s.expires_at,
+                       u.id, u.email, u.wechat_openid, u.wechat_unionid, u.provider, u.nickname, u.avatar_url, u.raw, u.created_at, u.updated_at, u.last_login_at
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.session_hash = %s AND s.expires_at > now()
+                LIMIT 1
+                """,
+                (session_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            user = _user_from_row((row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12]))
+            return {
+                "id": row[0],
+                "expires_at": row[1].isoformat() if hasattr(row[1], "isoformat") else row[1],
+                "user": user,
+            }
+        except Exception as exc:
+            print(f"[storage_db] get_session failed: {exc}")
+            return None
+
+
+def delete_session(session_hash: str) -> bool:
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            conn.execute("DELETE FROM sessions WHERE session_hash = %s", (session_hash,))
+            return True
+        except Exception as exc:
+            print(f"[storage_db] delete_session failed: {exc}")
+            return False

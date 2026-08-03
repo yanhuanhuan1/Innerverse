@@ -10,6 +10,7 @@ import urllib.error
 import os
 import re
 import random
+import secrets
 import sys
 import subprocess
 import time
@@ -35,7 +36,7 @@ from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 import storage_r2
@@ -259,6 +260,120 @@ DEFAULT_STORAGE_DIRS = {
     "generated": OUTPUT_OUTPUT_DIR,
     "local": LOCAL_UPLOAD_DIR,
 }
+
+WECHAT_APP_ID = str(os.getenv("WECHAT_APP_ID", "")).strip()
+WECHAT_APP_SECRET = str(os.getenv("WECHAT_APP_SECRET", "")).strip()
+WECHAT_REDIRECT_URI = str(os.getenv("WECHAT_REDIRECT_URI", "")).strip()
+PUBLIC_BASE_URL = str(os.getenv("PUBLIC_BASE_URL", "")).strip().rstrip("/")
+AUTH_SESSION_SECRET = str(os.getenv("AUTH_SESSION_SECRET", "")).strip()
+AUTH_COOKIE_NAME = str(os.getenv("AUTH_COOKIE_NAME", "innerverse_session")).strip() or "innerverse_session"
+AUTH_STATE_COOKIE_NAME = "innerverse_oauth_state"
+AUTH_SESSION_DAYS = int(os.getenv("AUTH_SESSION_DAYS", "30") or "30")
+AUTH_COOKIE_SECURE = str(os.getenv("AUTH_COOKIE_SECURE", "auto")).strip().lower()
+EMAIL_PROVIDER = str(os.getenv("EMAIL_PROVIDER", "resend")).strip().lower()
+RESEND_API_KEY = str(os.getenv("RESEND_API_KEY", "")).strip()
+EMAIL_FROM = str(os.getenv("EMAIL_FROM", "")).strip()
+EMAIL_CODE_TTL_MINUTES = int(os.getenv("EMAIL_CODE_TTL_MINUTES", "10") or "10")
+EMAIL_CODE_COOLDOWN_SECONDS = int(os.getenv("EMAIL_CODE_COOLDOWN_SECONDS", "45") or "45")
+EMAIL_CODE_LAST_SENT = {}
+
+def auth_is_configured():
+    return bool(storage_db.is_configured() and AUTH_SESSION_SECRET)
+
+def email_auth_is_configured():
+    return bool(auth_is_configured() and EMAIL_PROVIDER == "resend" and RESEND_API_KEY and EMAIL_FROM)
+
+def wechat_auth_is_configured():
+    return bool(auth_is_configured() and WECHAT_APP_ID and WECHAT_APP_SECRET)
+
+def auth_cookie_secure(request: Request = None):
+    if AUTH_COOKIE_SECURE in {"1", "true", "yes", "on"}:
+        return True
+    if AUTH_COOKIE_SECURE in {"0", "false", "no", "off"}:
+        return False
+    if request and str(request.url.scheme).lower() == "https":
+        return True
+    return IS_VERCEL
+
+def auth_token_hash(token: str):
+    if not AUTH_SESSION_SECRET:
+        return ""
+    return hmac.new(AUTH_SESSION_SECRET.encode("utf-8"), str(token or "").encode("utf-8"), hashlib.sha256).hexdigest()
+
+def auth_code_hash(email: str, code: str):
+    if not AUTH_SESSION_SECRET:
+        return ""
+    payload = f"{str(email or '').strip().lower()}:{str(code or '').strip()}"
+    return hmac.new(AUTH_SESSION_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def request_origin(request: Request):
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if forwarded_host:
+        return f"{forwarded_proto or request.url.scheme}://{forwarded_host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+def wechat_callback_url(request: Request):
+    if WECHAT_REDIRECT_URI:
+        return WECHAT_REDIRECT_URI
+    return f"{request_origin(request)}/api/auth/wechat/callback"
+
+def normalize_login_email(email: str):
+    value = str(email or "").strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+        return ""
+    return value[:254]
+
+def session_user_from_request(request: Request):
+    token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    if not token:
+        return None
+    session_hash = auth_token_hash(token)
+    if not session_hash:
+        return None
+    session = storage_db.get_session(session_hash) if storage_db.is_configured() else None
+    return session.get("user") if isinstance(session, dict) and isinstance(session.get("user"), dict) else None
+
+def require_current_user(request: Request):
+    if not auth_is_configured():
+        raise HTTPException(status_code=503, detail="微信登录尚未配置")
+    user = session_user_from_request(request)
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+def response_user(user):
+    if not user:
+        return None
+    return {
+        "id": user.get("id"),
+        "nickname": user.get("nickname") or "微信用户",
+        "avatar_url": user.get("avatar_url") or "",
+    }
+
+# Auth v2 uses email verification as the primary login method. These
+# definitions intentionally override the earlier WeChat-shaped helpers while
+# keeping the old OAuth routes available for future use.
+def require_current_user(request: Request):
+    if not auth_is_configured():
+        raise HTTPException(status_code=503, detail="登录尚未配置")
+    user = session_user_from_request(request)
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+def response_user(user):
+    if not user:
+        return None
+    return {
+        "id": user.get("id"),
+        "email": user.get("email") or "",
+        "provider": user.get("provider") or "",
+        "nickname": user.get("nickname") or user.get("email") or "用户",
+        "avatar_url": user.get("avatar_url") or "",
+    }
 
 def _storage_abs_path(value, fallback):
     text = str(value or "").strip()
@@ -2790,6 +2905,13 @@ class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     order: Optional[int] = None
 
+class EmailLoginStartRequest(BaseModel):
+    email: str
+
+class EmailLoginVerifyRequest(BaseModel):
+    email: str
+    code: str
+
 class CanvasSaveRequest(BaseModel):
     title: str = "未命名画布"
     icon: str = "🧩"
@@ -3324,13 +3446,25 @@ def normalize_canvas_kind(kind="classic"):
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
 DEFAULT_PROJECT_ID = "default"
 
-def load_projects():
+def user_storage_id(user_id=""):
+    return re.sub(r"[^a-zA-Z0-9_-]", "", str(user_id or "")) or "anon"
+
+def user_projects_path(user_id=""):
+    return os.path.join(DATA_DIR, f"projects-{user_storage_id(user_id)}.json")
+
+def canvas_belongs_to_user(canvas, user_id=""):
+    if not user_id:
+        return True
+    return str((canvas or {}).get("user_id") or "") == str(user_id)
+
+def load_projects(user_id=""):
     if storage_db.is_configured():
-        data = storage_db.kv_get("meta", "projects")
+        data = storage_db.kv_get("projects", user_storage_id(user_id))
         projects = (data or {}).get("projects") if isinstance(data, dict) else None
         return [p for p in projects if isinstance(p, dict) and p.get("id")] if isinstance(projects, list) else []
+    path = user_projects_path(user_id) if user_id else PROJECTS_PATH
     try:
-        with open(PROJECTS_PATH, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         projects = data.get("projects") if isinstance(data, dict) else data
         if isinstance(projects, list):
@@ -3339,12 +3473,13 @@ def load_projects():
         pass
     return []
 
-def save_projects(projects):
+def save_projects(projects, user_id=""):
     with CANVAS_LOCK:
         if storage_db.is_configured():
-            if storage_db.kv_set("meta", "projects", {"projects": projects}):
+            if storage_db.kv_set("projects", user_storage_id(user_id), {"projects": projects}):
                 return
-        with open(PROJECTS_PATH, 'w', encoding='utf-8') as f:
+        path = user_projects_path(user_id) if user_id else PROJECTS_PATH
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump({"projects": projects}, f, ensure_ascii=False, indent=2)
 
 def project_record(p):
@@ -3634,6 +3769,197 @@ def canvas_assets_index():
     item_counts = {"all": 0, "smart": 0, "classic": 0}
     cleanup_expired_canvas_trash()
     for canvas in iter_all_canvas_data():
+        if canvas.get("deleted_at"):
+            continue
+        record = canvas_record(canvas)
+        canvas_items = extract_canvas_assets(canvas)
+        record["asset_count"] = len(canvas_items)
+        canvases.append(record)
+        items.extend(canvas_items)
+        kind = record.get("kind") or "classic"
+        canvas_counts["all"] += 1
+        canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
+        item_counts["all"] += len(canvas_items)
+        item_counts[kind] = item_counts.get(kind, 0) + len(canvas_items)
+    canvases.sort(key=lambda item: (0 if item.get("pinned") else 1, -int(item.get("updated_at") or item.get("created_at") or 0)))
+    items.sort(key=lambda item: int(item.get("canvas_updated_at") or item.get("created_at") or 0), reverse=True)
+    categories = [
+        {"id": "all", "name": "全部画布", "count": item_counts.get("all", 0), "canvas_count": canvas_counts.get("all", 0)},
+        {"id": "smart", "name": "智能画布", "count": item_counts.get("smart", 0), "canvas_count": canvas_counts.get("smart", 0)},
+        {"id": "classic", "name": "普通画布", "count": item_counts.get("classic", 0), "canvas_count": canvas_counts.get("classic", 0)},
+    ]
+    return {"categories": categories, "canvases": canvases, "items": items}
+
+def load_projects(user_id=""):
+    if storage_db.is_configured():
+        data = storage_db.kv_get("projects", user_storage_id(user_id))
+        projects = (data or {}).get("projects") if isinstance(data, dict) else None
+        return [p for p in projects if isinstance(p, dict) and p.get("id")] if isinstance(projects, list) else []
+    path = user_projects_path(user_id) if user_id else PROJECTS_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        projects = data.get("projects") if isinstance(data, dict) else data
+        if isinstance(projects, list):
+            return [p for p in projects if isinstance(p, dict) and p.get("id")]
+    except Exception:
+        pass
+    return []
+
+def save_projects(projects, user_id=""):
+    with CANVAS_LOCK:
+        if storage_db.is_configured():
+            if storage_db.kv_set("projects", user_storage_id(user_id), {"projects": projects}):
+                return
+        path = user_projects_path(user_id) if user_id else PROJECTS_PATH
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"projects": projects}, f, ensure_ascii=False, indent=2)
+
+def ensure_default_project(user_id=""):
+    projects = load_projects(user_id)
+    if not any(p.get("id") == DEFAULT_PROJECT_ID for p in projects):
+        ts = now_ms()
+        projects.insert(0, {
+            "id": DEFAULT_PROJECT_ID,
+            "name": "默认项目",
+            "order": 0,
+            "created_at": ts,
+            "updated_at": ts,
+            "user_id": user_id,
+        })
+        save_projects(projects, user_id)
+    return projects
+
+def new_project(name="新项目", user_id=""):
+    projects = ensure_default_project(user_id)
+    ts = now_ms()
+    clean = (str(name or "").strip() or "新项目")[:60]
+    order = max([int(p.get("order") or 0) for p in projects], default=0) + 1
+    proj = {"id": uuid.uuid4().hex, "name": clean, "order": order, "created_at": ts, "updated_at": ts, "user_id": user_id}
+    projects.append(proj)
+    save_projects(projects, user_id)
+    return proj
+
+def list_projects(user_id=""):
+    projects = ensure_default_project(user_id)
+    counts = {}
+    for rec in iter_canvas_records(include_deleted=False, user_id=user_id):
+        pid = rec.get("project") or DEFAULT_PROJECT_ID
+        counts[pid] = counts.get(pid, 0) + 1
+    out = []
+    for p in sorted(projects, key=lambda x: (int(x.get("order") or 0), x.get("created_at") or 0)):
+        rec = project_record(p)
+        rec["canvas_count"] = counts.get(rec["id"], 0)
+        out.append(rec)
+    return out
+
+def new_canvas(title="未命名画布", icon="layers", kind="classic", project=None, board_x=None, board_y=None, user_id=""):
+    timestamp = now_ms()
+    canvas_kind = normalize_canvas_kind(kind)
+    canvas = {
+        "id": uuid.uuid4().hex,
+        "title": (title or ("智能画布" if canvas_kind == "smart" else "未命名画布"))[:80],
+        "icon": (icon or ("sparkles" if canvas_kind == "smart" else "layers"))[:32],
+        "kind": canvas_kind,
+        "owner": "",
+        "color": "",
+        "pinned": False,
+        "project": str(project or "").strip() or DEFAULT_PROJECT_ID,
+        "user_id": user_id,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "nodes": [],
+        "connections": [],
+        "viewport": {"x": 0, "y": 0, "scale": 1},
+    }
+    if board_x is not None:
+        canvas["board_x"] = float(board_x)
+    if board_y is not None:
+        canvas["board_y"] = float(board_y)
+    save_canvas(canvas)
+    return canvas
+
+def load_canvas_any(canvas_id, user_id=""):
+    cleaned = canvas_id_clean(canvas_id)
+    if storage_db.is_configured():
+        canvas = storage_db.kv_get("canvases", cleaned)
+        if not isinstance(canvas, dict) or not canvas_belongs_to_user(canvas, user_id):
+            raise HTTPException(status_code=404, detail="画布不存在")
+        return canvas
+    path = canvas_path(cleaned)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="画布不存在")
+    with open(path, "r", encoding="utf-8") as f:
+        canvas = json.load(f)
+    if not canvas_belongs_to_user(canvas, user_id):
+        raise HTTPException(status_code=404, detail="画布不存在")
+    return canvas
+
+def load_canvas(canvas_id, user_id=""):
+    canvas = load_canvas_any(canvas_id, user_id)
+    if canvas.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="画布已在回收站")
+    return canvas
+
+def iter_all_canvas_data(user_id=""):
+    if storage_db.is_configured():
+        for data in storage_db.kv_list("canvases"):
+            if isinstance(data, dict) and canvas_belongs_to_user(data, user_id):
+                yield data
+        return
+    for filename in os.listdir(CANVAS_DIR):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if canvas_belongs_to_user(data, user_id):
+                yield data
+        except Exception:
+            continue
+
+def cleanup_expired_canvas_trash(user_id=""):
+    cutoff = now_ms() - CANVAS_TRASH_RETENTION_MS
+    with CANVAS_LOCK:
+        for data in list(iter_all_canvas_data(user_id)):
+            try:
+                deleted_at = int(data.get("deleted_at") or 0)
+                if deleted_at and deleted_at < cutoff:
+                    canvas_delete_raw(data.get("id"))
+            except Exception:
+                continue
+
+def iter_canvas_records(include_deleted=False, user_id=""):
+    cleanup_expired_canvas_trash(user_id)
+    records = []
+    for data in iter_all_canvas_data(user_id):
+        is_deleted = bool(data.get("deleted_at"))
+        if include_deleted != is_deleted:
+            continue
+        records.append(canvas_record(data))
+    return records
+
+def list_canvases(user_id=""):
+    records = iter_canvas_records(include_deleted=False, user_id=user_id)
+    return sorted(
+        records,
+        key=lambda item: (
+            0 if item.get("pinned") else 1,
+            -int(item.get("updated_at") or item.get("created_at") or 0),
+        ),
+    )
+
+def list_deleted_canvases(user_id=""):
+    records = iter_canvas_records(include_deleted=True, user_id=user_id)
+    return sorted(records, key=lambda item: item["deleted_at"], reverse=True)
+
+def canvas_assets_index(user_id=""):
+    canvases = []
+    items = []
+    canvas_counts = {"all": 0, "smart": 0, "classic": 0}
+    item_counts = {"all": 0, "smart": 0, "classic": 0}
+    cleanup_expired_canvas_trash(user_id)
+    for canvas in iter_all_canvas_data(user_id):
         if canvas.get("deleted_at"):
             continue
         record = canvas_record(canvas)
@@ -14259,7 +14585,8 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
         })
 
 @app.post("/api/canvas-image-tasks")
-async def create_canvas_image_task(payload: OnlineImageRequest):
+async def create_canvas_image_task(payload: OnlineImageRequest, request: Request):
+    user = require_current_user(request)
     task_id = f"canvas_img_{uuid.uuid4().hex}"
     now = time.time()
     _create_canvas_task_record({
@@ -14273,6 +14600,7 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
         "provider_id": payload.provider_id,
         "model": payload.model,
         "payload": _model_payload_dict(payload),
+        "user_id": user["id"],
     })
     try:
         provider = get_api_provider(payload.provider_id)
@@ -14314,9 +14642,12 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
     return _get_canvas_task_record(task_id)
 
 @app.get("/api/canvas-image-tasks/{task_id}")
-async def get_canvas_image_task(task_id: str):
+async def get_canvas_image_task(task_id: str, request: Request):
+    user = require_current_user(request)
     task = _get_canvas_task_record(task_id)
     if not task:
+        raise HTTPException(status_code=404, detail="Canvas task was not found. It may be expired or unavailable on this runtime.")
+    if str(task.get("user_id") or "") != str(user["id"]):
         raise HTTPException(status_code=404, detail="Canvas task was not found. It may be expired or unavailable on this runtime.")
     if task.get("status") in {"queued", "running", "upstream_pending"}:
         upstream_task_ids = task.get("upstream_task_ids") or ([task.get("upstream_task_id")] if task.get("upstream_task_id") else [])
@@ -14369,7 +14700,8 @@ async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
         })
 
 @app.post("/api/canvas-comfy-tasks")
-async def create_canvas_comfy_task(payload: GenerateRequest):
+async def create_canvas_comfy_task(payload: GenerateRequest, request: Request):
+    user = require_current_user(request)
     task_id = f"canvas_comfy_{uuid.uuid4().hex}"
     now = time.time()
     _create_canvas_task_record({
@@ -14382,14 +14714,18 @@ async def create_canvas_comfy_task(payload: GenerateRequest):
         "error": "",
         "workflow_json": payload.workflow_json,
         "payload": _model_payload_dict(payload),
+        "user_id": user["id"],
     })
     asyncio.create_task(run_canvas_comfy_task(task_id, payload))
     return {"task_id": task_id, "status": "queued"}
 
 @app.get("/api/canvas-comfy-tasks/{task_id}")
-async def get_canvas_comfy_task(task_id: str):
+async def get_canvas_comfy_task(task_id: str, request: Request):
+    user = require_current_user(request)
     task = _get_canvas_task_record(task_id)
     if not task:
+        raise HTTPException(status_code=404, detail="Canvas ComfyUI task was not found. It may be expired or unavailable on this runtime.")
+    if str(task.get("user_id") or "") != str(user["id"]):
         raise HTTPException(status_code=404, detail="Canvas ComfyUI task was not found. It may be expired or unavailable on this runtime.")
     return task
 # --- 图像生成参数 schema（供客户端动态渲染参数表单，避免把参数写死在前端） ---
@@ -15400,7 +15736,8 @@ def volcengine_video_prompt_text(prompt, aspect_ratio="", duration=None):
     return f"{text} {suffix_text}".strip() if text else suffix_text
 
 @app.post("/api/canvas-video")
-async def canvas_video(payload: CanvasVideoRequest):
+async def canvas_video(payload: CanvasVideoRequest, request: Request):
+    require_current_user(request)
     provider = get_api_provider(payload.provider_id)
     if is_jimeng_provider(provider):
         return await generate_jimeng_video(payload, provider)
@@ -15897,7 +16234,8 @@ async def canvas_video(payload: CanvasVideoRequest):
 # --- Canvas LLM ---
 
 @app.post("/api/canvas-llm")
-async def canvas_llm(payload: CanvasLLMRequest):
+async def canvas_llm(payload: CanvasLLMRequest, request: Request):
+    require_current_user(request)
     _provider = get_api_provider(payload.provider)
     if is_codex_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
@@ -15989,6 +16327,211 @@ async def canvas_llm(payload: CanvasLLMRequest):
 
 # --- 对话管理 ---
 
+async def send_resend_login_code(email: str, code: str):
+    if not email_auth_is_configured():
+        raise HTTPException(status_code=503, detail="邮箱登录尚未配置：请设置 DATABASE_URL、AUTH_SESSION_SECRET、RESEND_API_KEY 和 EMAIL_FROM")
+    text = (
+        f"你的方寸万象登录验证码是：{code}\n\n"
+        f"验证码 {EMAIL_CODE_TTL_MINUTES} 分钟内有效。如果不是你本人操作，请忽略这封邮件。"
+    )
+    html_body = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.7;color:#242321">
+      <h2 style="margin:0 0 12px">方寸万象登录验证码</h2>
+      <p>你的验证码是：</p>
+      <p style="font-size:28px;font-weight:800;letter-spacing:6px;margin:16px 0">{html.escape(code)}</p>
+      <p style="color:#6f6b64">验证码 {EMAIL_CODE_TTL_MINUTES} 分钟内有效。如果不是你本人操作，请忽略这封邮件。</p>
+    </div>
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            res = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": bearer_auth_value(RESEND_API_KEY), "Content-Type": "application/json"},
+                json={
+                    "from": EMAIL_FROM,
+                    "to": [email],
+                    "subject": "方寸万象登录验证码",
+                    "text": text,
+                    "html": html_body,
+                },
+            )
+        if res.status_code >= 400:
+            try:
+                detail = res.json().get("message") or res.text
+            except Exception:
+                detail = res.text
+            raise HTTPException(status_code=502, detail=f"验证码邮件发送失败：{str(detail)[:300]}")
+        return True
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"验证码邮件发送失败：{exc}") from exc
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    user = session_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录")
+    return {"user": response_user(user)}
+
+@app.post("/api/auth/email/start")
+async def email_login_start(payload: EmailLoginStartRequest, request: Request):
+    if not email_auth_is_configured():
+        raise HTTPException(status_code=503, detail="邮箱登录尚未配置：请设置 DATABASE_URL、AUTH_SESSION_SECRET、RESEND_API_KEY 和 EMAIL_FROM")
+    email = normalize_login_email(payload.email)
+    if not email:
+        raise HTTPException(status_code=400, detail="请输入有效邮箱")
+    now = time.time()
+    last_sent = EMAIL_CODE_LAST_SENT.get(email, 0)
+    remaining = int(EMAIL_CODE_COOLDOWN_SECONDS - (now - last_sent))
+    if remaining > 0:
+        raise HTTPException(status_code=429, detail=f"请 {remaining} 秒后再获取验证码")
+    code = f"{secrets.randbelow(1000000):06d}"
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=EMAIL_CODE_TTL_MINUTES)
+    if not storage_db.create_email_login_code(
+        email=email,
+        code_hash=auth_code_hash(email, code),
+        expires_at=expires,
+        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
+        user_agent=request.headers.get("user-agent", ""),
+    ):
+        raise HTTPException(status_code=500, detail="创建验证码失败")
+    await send_resend_login_code(email, code)
+    EMAIL_CODE_LAST_SENT[email] = now
+    return {"ok": True, "ttl_minutes": EMAIL_CODE_TTL_MINUTES}
+
+@app.post("/api/auth/email/verify")
+async def email_login_verify(payload: EmailLoginVerifyRequest, request: Request):
+    if not auth_is_configured():
+        raise HTTPException(status_code=503, detail="登录尚未配置")
+    email = normalize_login_email(payload.email)
+    code = re.sub(r"\D", "", str(payload.code or ""))[:6]
+    if not email or len(code) != 6:
+        raise HTTPException(status_code=400, detail="邮箱或验证码格式不正确")
+    if not storage_db.consume_email_login_code(email, auth_code_hash(email, code)):
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+    user = storage_db.upsert_email_user(email)
+    if not user:
+        raise HTTPException(status_code=500, detail="创建用户失败")
+    token = secrets.token_urlsafe(32)
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=AUTH_SESSION_DAYS)
+    if not storage_db.create_session(
+        user_id=user["id"],
+        session_hash=auth_token_hash(token),
+        expires_at=expires,
+        user_agent=request.headers.get("user-agent", ""),
+        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
+    ):
+        raise HTTPException(status_code=500, detail="创建登录会话失败")
+    res = JSONResponse({"ok": True, "user": response_user(user)})
+    max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
+    res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
+    return res
+
+@app.get("/api/auth/wechat/login")
+async def wechat_login(request: Request):
+    if not wechat_auth_is_configured():
+        raise HTTPException(status_code=503, detail="微信登录尚未配置：请设置 DATABASE_URL、WECHAT_APP_ID、WECHAT_APP_SECRET 和 AUTH_SESSION_SECRET")
+    state = secrets.token_urlsafe(24)
+    callback = wechat_callback_url(request)
+    params = urllib.parse.urlencode({
+        "appid": WECHAT_APP_ID,
+        "redirect_uri": callback,
+        "response_type": "code",
+        "scope": "snsapi_login",
+        "state": state,
+    })
+    url = f"https://open.weixin.qq.com/connect/qrconnect?{params}#wechat_redirect"
+    res = JSONResponse({"url": url, "redirect_uri": callback})
+    res.set_cookie(
+        AUTH_STATE_COOKIE_NAME,
+        state,
+        max_age=600,
+        httponly=True,
+        secure=auth_cookie_secure(request),
+        samesite="lax",
+        path="/",
+    )
+    return res
+
+@app.get("/api/auth/wechat/callback")
+async def wechat_callback(request: Request, code: str = "", state: str = ""):
+    if not wechat_auth_is_configured():
+        raise HTTPException(status_code=503, detail="微信登录尚未配置")
+    expected_state = request.cookies.get(AUTH_STATE_COOKIE_NAME, "")
+    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        raise HTTPException(status_code=400, detail="微信登录状态已过期，请重新登录")
+    if not code:
+        raise HTTPException(status_code=400, detail="缺少微信授权 code")
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            token_res = await client.get(
+                "https://api.weixin.qq.com/sns/oauth2/access_token",
+                params={
+                    "appid": WECHAT_APP_ID,
+                    "secret": WECHAT_APP_SECRET,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_data = token_res.json()
+            if token_data.get("errcode"):
+                raise HTTPException(status_code=502, detail=f"微信授权失败：{token_data.get('errmsg') or token_data.get('errcode')}")
+            access_token = str(token_data.get("access_token") or "")
+            openid = str(token_data.get("openid") or "")
+            unionid = str(token_data.get("unionid") or "")
+            if not access_token or not openid:
+                raise HTTPException(status_code=502, detail="微信授权返回缺少 access_token 或 openid")
+            profile = {}
+            try:
+                user_res = await client.get(
+                    "https://api.weixin.qq.com/sns/userinfo",
+                    params={"access_token": access_token, "openid": openid, "lang": "zh_CN"},
+                )
+                profile = user_res.json()
+                if profile.get("errcode"):
+                    profile = {}
+            except Exception:
+                profile = {}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"微信登录请求失败：{exc}") from exc
+
+    user = storage_db.upsert_wechat_user(
+        openid=openid,
+        unionid=str(profile.get("unionid") or unionid or ""),
+        nickname=str(profile.get("nickname") or "微信用户"),
+        avatar_url=str(profile.get("headimgurl") or ""),
+        raw={"token": {k: v for k, v in token_data.items() if k not in {"access_token", "refresh_token"}}, "profile": profile},
+    )
+    if not user:
+        raise HTTPException(status_code=500, detail="保存微信用户失败")
+    token = secrets.token_urlsafe(32)
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=AUTH_SESSION_DAYS)
+    if not storage_db.create_session(
+        user_id=user["id"],
+        session_hash=auth_token_hash(token),
+        expires_at=expires,
+        user_agent=request.headers.get("user-agent", ""),
+        ip=request.headers.get("x-forwarded-for", request.client.host if request.client else ""),
+    ):
+        raise HTTPException(status_code=500, detail="创建登录会话失败")
+    res = RedirectResponse(url="/", status_code=302)
+    max_age = AUTH_SESSION_DAYS * 24 * 60 * 60
+    res.set_cookie(AUTH_COOKIE_NAME, token, max_age=max_age, expires=max_age, httponly=True, secure=auth_cookie_secure(request), samesite="lax", path="/")
+    res.delete_cookie(AUTH_STATE_COOKIE_NAME, path="/")
+    return res
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    if token:
+        storage_db.delete_session(auth_token_hash(token))
+    res = JSONResponse({"ok": True})
+    res.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    return res
+
 @app.get("/api/conversations")
 async def conversations(request: Request, x_user_id: str = Header(default="")):
     user_id = safe_user_id(x_user_id, request)
@@ -16015,20 +16558,24 @@ async def delete_conversation(conversation_id: str, request: Request, x_user_id:
 # --- 画布管理 ---
 
 @app.get("/api/canvases")
-async def canvases():
-    return {"canvases": list_canvases()}
+async def canvases(request: Request):
+    user = require_current_user(request)
+    return {"canvases": list_canvases(user["id"])}
 
 @app.get("/api/projects")
-async def get_projects():
-    return {"projects": list_projects()}
+async def get_projects(request: Request):
+    user = require_current_user(request)
+    return {"projects": list_projects(user["id"])}
 
 @app.post("/api/projects")
-async def create_project(payload: ProjectCreateRequest):
-    return {"project": project_record(new_project(payload.name))}
+async def create_project(payload: ProjectCreateRequest, request: Request):
+    user = require_current_user(request)
+    return {"project": project_record(new_project(payload.name, user["id"]))}
 
 @app.post("/api/projects/{project_id}")
-async def update_project(project_id: str, payload: ProjectUpdateRequest):
-    projects = ensure_default_project()
+async def update_project(project_id: str, payload: ProjectUpdateRequest, request: Request):
+    user = require_current_user(request)
+    projects = ensure_default_project(user["id"])
     target = next((p for p in projects if p.get("id") == project_id), None)
     if not target:
         raise HTTPException(status_code=404, detail="项目不存在")
@@ -16037,23 +16584,24 @@ async def update_project(project_id: str, payload: ProjectUpdateRequest):
     if payload.order is not None:
         target["order"] = int(payload.order)
     target["updated_at"] = now_ms()
-    save_projects(projects)
+    save_projects(projects, user["id"])
     return {"project": project_record(target)}
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, request: Request):
     """删除项目：默认项目不可删除；其余项目删除后，其下画布回归默认项目（不删画布）。"""
     if project_id == DEFAULT_PROJECT_ID:
         raise HTTPException(status_code=400, detail="默认项目不可删除")
-    projects = ensure_default_project()
+    user = require_current_user(request)
+    projects = ensure_default_project(user["id"])
     if not any(p.get("id") == project_id for p in projects):
         raise HTTPException(status_code=404, detail="项目不存在")
     projects = [p for p in projects if p.get("id") != project_id]
-    save_projects(projects)
+    save_projects(projects, user["id"])
     # 把该项目下的画布迁回默认项目
     moved = 0
     with CANVAS_LOCK:
-        for data in iter_all_canvas_data():
+        for data in iter_all_canvas_data(user["id"]):
             if str(data.get("project") or "") == project_id:
                 data["project"] = DEFAULT_PROJECT_ID
                 canvas_write_raw(data)
@@ -16061,16 +16609,19 @@ async def delete_project(project_id: str):
     return {"ok": True, "moved": moved}
 
 @app.get("/api/canvases/trash")
-async def trashed_canvases():
-    return {"canvases": list_deleted_canvases(), "retention_days": 30}
+async def trashed_canvases(request: Request):
+    user = require_current_user(request)
+    return {"canvases": list_deleted_canvases(user["id"]), "retention_days": 30}
 
 @app.post("/api/canvases")
-async def create_canvas(payload: CanvasCreateRequest):
-    return {"canvas": new_canvas(payload.title, payload.icon, payload.kind, payload.project, payload.board_x, payload.board_y)}
+async def create_canvas(payload: CanvasCreateRequest, request: Request):
+    user = require_current_user(request)
+    return {"canvas": new_canvas(payload.title, payload.icon, payload.kind, payload.project, payload.board_x, payload.board_y, user["id"])}
 
 @app.get("/api/canvases/{canvas_id}/meta")
-async def get_canvas_meta(canvas_id: str):
-    canvas = load_canvas(canvas_id)
+async def get_canvas_meta(canvas_id: str, request: Request):
+    user = require_current_user(request)
+    canvas = load_canvas(canvas_id, user["id"])
     return {
         "id": canvas.get("id"),
         "updated_at": canvas.get("updated_at", 0),
@@ -16080,12 +16631,13 @@ async def get_canvas_meta(canvas_id: str):
     }
 
 @app.post("/api/canvases/{canvas_id}/meta")
-async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
+async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate, request: Request):
     """更新画布的轻量元数据（标题/图标/负责人/颜色/置顶）。
     刻意不走 save_canvas（它会刷新 updated_at），以免打标签/置顶把画布顶到列表最前。"""
+    user = require_current_user(request)
     def mutate_meta():
         with CANVAS_LOCK:
-            canvas = load_canvas(canvas_id)
+            canvas = load_canvas(canvas_id, user["id"])
             if payload.title is not None:
                 canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
             if payload.icon is not None:
@@ -16109,14 +16661,16 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
     return {"canvas": canvas_record(canvas)}
 
 @app.get("/api/canvases/{canvas_id}")
-async def get_canvas(canvas_id: str):
-    return {"canvas": load_canvas(canvas_id)}
+async def get_canvas(canvas_id: str, request: Request):
+    user = require_current_user(request)
+    return {"canvas": load_canvas(canvas_id, user["id"])}
 
 @app.post("/api/canvases/{canvas_id}/touch")
-async def touch_canvas(canvas_id: str):
+async def touch_canvas(canvas_id: str, request: Request):
+    user = require_current_user(request)
     def touch():
         with CANVAS_LOCK:
-            canvas = load_canvas(canvas_id)
+            canvas = load_canvas(canvas_id, user["id"])
             save_canvas(canvas)
             return canvas
 
@@ -16124,10 +16678,11 @@ async def touch_canvas(canvas_id: str):
     return {"canvas": canvas_record(canvas), "updated_at": canvas.get("updated_at", 0)}
 
 @app.get("/api/canvas-assets")
-async def list_canvas_assets():
+async def list_canvas_assets(request: Request):
     # canvas_assets_index 会同步遍历并解析所有画布 JSON，放进线程池避免阻塞事件循环
     # （否则画布多时一次请求就会卡住整个 asyncio loop，连 WebSocket 一起掉线）。
-    return await asyncio.to_thread(canvas_assets_index)
+    user = require_current_user(request)
+    return await asyncio.to_thread(canvas_assets_index, user["id"])
 
 @app.get("/api/smart-canvas/prompt-templates")
 async def smart_canvas_prompt_templates():
@@ -17220,10 +17775,11 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
     return {"library": lib, "added": len(added), "items": added}
 
 @app.put("/api/canvases/{canvas_id}")
-async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
+async def update_canvas(canvas_id: str, payload: CanvasSaveRequest, request: Request):
+    user = require_current_user(request)
     def mutate_canvas():
         with CANVAS_LOCK:
-            canvas = load_canvas(canvas_id)
+            canvas = load_canvas(canvas_id, user["id"])
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
@@ -17250,14 +17806,15 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     return {"canvas": canvas}
 
 @app.post("/api/canvases/{canvas_id}/logs/delete")
-async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
+async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest, request: Request):
+    user = require_current_user(request)
     log_id = str(payload.log_id or "").strip()
     if not log_id:
         raise HTTPException(status_code=400, detail="缺少日志 ID")
 
     def remove_log_record():
         with CANVAS_LOCK:
-            canvas = load_canvas(canvas_id)
+            canvas = load_canvas(canvas_id, user["id"])
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
@@ -17329,10 +17886,11 @@ async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
     }
 
 @app.delete("/api/canvases/{canvas_id}")
-async def delete_canvas(canvas_id: str):
+async def delete_canvas(canvas_id: str, request: Request):
+    user = require_current_user(request)
     def soft_delete():
         with CANVAS_LOCK:
-            canvas = load_canvas_any(canvas_id)
+            canvas = load_canvas_any(canvas_id, user["id"])
             if not canvas.get("deleted_at"):
                 canvas["deleted_at"] = now_ms()
                 save_canvas(canvas)
@@ -17341,10 +17899,11 @@ async def delete_canvas(canvas_id: str):
     return {"ok": True}
 
 @app.post("/api/canvases/{canvas_id}/restore")
-async def restore_canvas(canvas_id: str):
+async def restore_canvas(canvas_id: str, request: Request):
+    user = require_current_user(request)
     def restore():
         with CANVAS_LOCK:
-            canvas = load_canvas_any(canvas_id)
+            canvas = load_canvas_any(canvas_id, user["id"])
             if canvas.get("deleted_at"):
                 canvas.pop("deleted_at", None)
                 save_canvas(canvas)
@@ -17354,9 +17913,11 @@ async def restore_canvas(canvas_id: str):
     return {"canvas": canvas}
 
 @app.delete("/api/canvases/{canvas_id}/purge")
-async def purge_canvas(canvas_id: str):
+async def purge_canvas(canvas_id: str, request: Request):
+    user = require_current_user(request)
     def purge():
         with CANVAS_LOCK:
+            load_canvas_any(canvas_id, user["id"])
             canvas_delete_raw(canvas_id)
 
     await asyncio.to_thread(purge)

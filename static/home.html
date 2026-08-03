@@ -19,11 +19,17 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/theme.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/i18n.js?v=2026.07.23.1784878252"></script>
-    <link rel="stylesheet" href="/static/css/home.css?v=2026.07.30.0936">
+    <link rel="stylesheet" href="/static/css/home.css?v=2026.08.03.email">
 </head>
 <body>
     <main class="home-shell">
         <header class="home-status">
+            <button id="emailLoginBtn" class="home-pill-btn auth-login" type="button" title="邮箱登录" aria-label="邮箱登录"><i data-lucide="mail"></i><span>邮箱登录</span></button>
+            <div id="homeUserBox" class="home-user-box" hidden>
+                <img id="homeUserAvatar" alt="" />
+                <span id="homeUserName">用户</span>
+                <button id="homeLogoutBtn" type="button" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
+            </div>
             <button id="homeThemeBtn" class="home-icon-btn" type="button" onclick="toggleHomeTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon"></i></button>
             <button id="homeLanguageBtn" class="home-pill-btn" type="button" onclick="toggleHomeLanguage()" title="切换语言" aria-label="切换语言"><i data-lucide="languages"></i><span>中文</span></button>
         </header>
@@ -52,7 +58,28 @@
         </section>
 
         <div id="homeStatus" class="home-toast"></div>
+        <div id="emailLoginModal" class="auth-modal" hidden>
+            <div class="auth-modal-backdrop" data-close-email-login></div>
+            <form id="emailLoginForm" class="auth-card">
+                <button class="auth-close" type="button" data-close-email-login aria-label="关闭"><i data-lucide="x"></i></button>
+                <h3>邮箱验证码登录</h3>
+                <p>输入邮箱后获取验证码，登录后你的项目和画布会独立保存。</p>
+                <label>
+                    <span>邮箱</span>
+                    <input id="loginEmailInput" type="email" autocomplete="email" placeholder="name@example.com" required>
+                </label>
+                <div class="auth-code-row">
+                    <label>
+                        <span>验证码</span>
+                        <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码">
+                    </label>
+                    <button id="sendEmailCodeBtn" type="button">获取验证码</button>
+                </div>
+                <button id="verifyEmailCodeBtn" class="auth-submit" type="submit">登录</button>
+                <div id="emailLoginHint" class="auth-hint"></div>
+            </form>
+        </div>
     </main>
-    <script src="/static/js/home.js?v=2026.07.30.0936"></script>
+    <script src="/static/js/home.js?v=2026.08.03.email"></script>
 </body>
 </html>

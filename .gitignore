@@ -45,3 +45,6 @@ data/update_staging/
 *.swp
 Thumbs.db
 .DS_Store
+.vercel
+.env*
+!.env.example

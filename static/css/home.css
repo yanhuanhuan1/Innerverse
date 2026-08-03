@@ -12,6 +12,13 @@ button { border:0; cursor:pointer; }
 .theme-dark .home-pill-btn,.theme-dark .home-icon-btn { background:rgba(17,24,39,.72); }
 .home-pill-btn { padding:0 12px; font-size:12px; font-weight:750; }
 .home-icon-btn { width:32px; }
+.home-user-box { height:34px; padding:3px 5px 3px 7px; border:1px solid rgba(36,35,33,.08); border-radius:999px; background:rgba(255,255,255,.64); color:var(--text); display:inline-flex; align-items:center; gap:7px; box-shadow:0 8px 22px var(--shadow); backdrop-filter:blur(14px); font-size:12px; font-weight:800; }
+.theme-dark .home-user-box { background:rgba(17,24,39,.72); }
+.home-user-box[hidden] { display:none; }
+.home-user-box img { width:24px; height:24px; border-radius:50%; object-fit:cover; background:var(--soft); }
+.home-user-box button { width:26px; height:26px; border-radius:50%; background:transparent; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; }
+.home-user-box button:hover { background:var(--soft); color:var(--text); }
+.home-user-box button i,.auth-login i { width:14px; height:14px; }
 .home-pill-btn i,.home-icon-btn i,.ghost-action i,.start-btn i,.see-all i { width:15px; height:15px; }
 .hero { width:min(900px, 100%); margin:10.5vh auto 0; text-align:center; transition:transform .56s var(--ease), opacity .32s ease; }
 .hero-kicker { margin:0 0 24px; color:var(--text); font-size:17px; font-weight:850; letter-spacing:0; text-transform:none; display:inline-flex; align-items:center; gap:8px; }
@@ -53,6 +60,26 @@ button { border:0; cursor:pointer; }
 .project-card-more i { width:15px; height:15px; }
 .home-toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(8px); opacity:0; pointer-events:none; padding:9px 13px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:12px; font-weight:800; transition:all .18s var(--ease); }
 .home-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.auth-modal[hidden] { display:none; }
+.auth-modal { position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:24px; }
+.auth-modal-backdrop { position:absolute; inset:0; background:rgba(12,17,27,.36); backdrop-filter:blur(10px); }
+.auth-card { position:relative; z-index:1; width:min(420px, 100%); padding:28px; border:1px solid var(--line); border-radius:20px; background:var(--card); color:var(--text); box-shadow:0 24px 70px rgba(0,0,0,.18); }
+.auth-card h3 { margin:0; font-size:24px; font-weight:900; letter-spacing:0; }
+.auth-card p { margin:9px 0 22px; color:var(--muted); font-size:13px; line-height:1.6; }
+.auth-card label { display:block; color:var(--muted); font-size:12px; font-weight:850; }
+.auth-card label span { display:block; margin-bottom:7px; }
+.auth-card input { width:100%; height:42px; border:1px solid var(--line); border-radius:12px; background:var(--soft); color:var(--text); outline:0; padding:0 12px; font-size:14px; font-weight:760; }
+.auth-card input:focus { border-color:var(--line-2); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.auth-code-row { display:grid; grid-template-columns:1fr 112px; gap:10px; margin-top:14px; align-items:end; }
+.auth-code-row button,.auth-submit { height:42px; border-radius:12px; font-size:13px; font-weight:900; }
+.auth-code-row button { background:var(--soft); color:var(--text); border:1px solid var(--line); }
+.auth-code-row button:disabled,.auth-submit:disabled { opacity:.58; cursor:wait; }
+.auth-submit { width:100%; margin-top:18px; background:var(--strong); color:var(--strong-text); }
+.auth-close { position:absolute; top:16px; right:16px; width:32px; height:32px; border-radius:999px; background:var(--soft); color:var(--muted); display:inline-flex; align-items:center; justify-content:center; }
+.auth-close:hover { color:var(--text); }
+.auth-close i { width:15px; height:15px; }
+.auth-hint { min-height:18px; margin-top:12px; color:var(--muted); font-size:12px; font-weight:760; line-height:1.5; }
+.auth-hint.error { color:#c65f47; }
 .project-icon-btn { width:36px; height:36px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--muted); display:inline-flex; align-items:center; justify-content:center; }
 .project-icon-btn:hover { color:var(--text); border-color:var(--line-2); }
 .project-icon-btn i,.project-primary-btn i,.back-home i { width:16px; height:16px; }

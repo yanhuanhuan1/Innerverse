@@ -88,6 +88,22 @@ vercel.json             Vercel 路由配置
 
 Innerverse can be deployed to Vercel as a FastAPI app. Import this repository in Vercel, keep the default Python build, and set the APIMart environment variables in the Vercel project settings.
 
+### Email Login
+
+Production project and canvas data is scoped by the logged-in email user. Configure these Vercel environment variables before enabling the site publicly:
+
+```env
+DATABASE_URL=your_neon_postgres_url
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=your_resend_api_key
+EMAIL_FROM=方寸万象 <no-reply@your-domain.com>
+PUBLIC_BASE_URL=https://your-domain.com
+AUTH_SESSION_SECRET=generate_a_long_random_secret
+AUTH_COOKIE_SECURE=true
+```
+
+Verify your sending domain in Resend before sending login codes to real users. The backend stores only hashed verification codes and hashed session tokens in Postgres; API keys must stay in Vercel environment variables.
+
 Check the deployment health endpoint after release:
 
 ```text

@@ -10,15 +10,29 @@ const statusEl = document.getElementById('homeStatus');
 const recentGrid = document.getElementById('recentGrid');
 const homeThemeBtn = document.getElementById('homeThemeBtn');
 const homeLanguageBtn = document.getElementById('homeLanguageBtn');
+const emailLoginBtn = document.getElementById('emailLoginBtn');
+const emailLoginModal = document.getElementById('emailLoginModal');
+const emailLoginForm = document.getElementById('emailLoginForm');
+const loginEmailInput = document.getElementById('loginEmailInput');
+const loginCodeInput = document.getElementById('loginCodeInput');
+const sendEmailCodeBtn = document.getElementById('sendEmailCodeBtn');
+const verifyEmailCodeBtn = document.getElementById('verifyEmailCodeBtn');
+const emailLoginHint = document.getElementById('emailLoginHint');
+const homeUserBox = document.getElementById('homeUserBox');
+const homeUserAvatar = document.getElementById('homeUserAvatar');
+const homeUserName = document.getElementById('homeUserName');
+const homeLogoutBtn = document.getElementById('homeLogoutBtn');
 let currentMode = 'text';
 let canvases = [];
 let projects = [];
+let currentUser = null;
 let selectedProjectId = localStorage.getItem('canvasListCurrentProjectId') || '';
 let statusTimer = null;
 let projectMenuProjectId = null;
 let pendingDeleteProjectId = null;
 let homeFocus = 'hero';
 let homeWheelGate = 0;
+let emailCodeCooldownTimer = null;
 const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
 const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
 
@@ -259,6 +273,156 @@ function handleHostMessage(event){
     if(data.type === 'home:navigate' && data.section === 'home') focusHeroSection();
     if(data.type === 'studio-theme' || data.type === 'studio-lang') setTimeout(syncHomeHeaderControls, 0);
 }
+
+function isAuthError(res){
+    return res && (res.status === 401 || res.status === 403);
+}
+
+function updateAuthUI(){
+    const loggedIn = Boolean(currentUser && currentUser.id);
+    if(emailLoginBtn) emailLoginBtn.hidden = loggedIn;
+    if(homeUserBox) homeUserBox.hidden = !loggedIn;
+    if(loggedIn) {
+        if(homeUserName) homeUserName.textContent = currentUser.email || currentUser.nickname || L('用户','User');
+        if(homeUserAvatar) {
+            homeUserAvatar.src = currentUser.avatar_url || '/static/images/logo.png';
+            homeUserAvatar.alt = currentUser.nickname || '';
+        }
+    }
+    refreshIcons();
+}
+
+async function loadCurrentUser(){
+    try {
+        const res = await fetch('/api/auth/me', {cache:'no-store'});
+        if(!res.ok) {
+            currentUser = null;
+            updateAuthUI();
+            return null;
+        }
+        const data = await res.json();
+        currentUser = data.user || null;
+        updateAuthUI();
+        return currentUser;
+    } catch(e) {
+        currentUser = null;
+        updateAuthUI();
+        return null;
+    }
+}
+
+function setEmailLoginHint(text, isError=false){
+    if(!emailLoginHint) return;
+    emailLoginHint.textContent = text || '';
+    emailLoginHint.classList.toggle('error', Boolean(isError));
+}
+
+function openEmailLogin(){
+    if(!emailLoginModal) return;
+    emailLoginModal.hidden = false;
+    setEmailLoginHint('');
+    setTimeout(() => loginEmailInput?.focus(), 30);
+    refreshIcons();
+}
+
+function closeEmailLogin(){
+    if(!emailLoginModal) return;
+    emailLoginModal.hidden = true;
+    setEmailLoginHint('');
+}
+
+function setEmailCodeCooldown(seconds){
+    clearInterval(emailCodeCooldownTimer);
+    let left = Number(seconds || 0);
+    if(!sendEmailCodeBtn) return;
+    const render = () => {
+        if(left <= 0) {
+            sendEmailCodeBtn.disabled = false;
+            sendEmailCodeBtn.textContent = L('获取验证码','Send code');
+            clearInterval(emailCodeCooldownTimer);
+            return;
+        }
+        sendEmailCodeBtn.disabled = true;
+        sendEmailCodeBtn.textContent = `${left}s`;
+        left -= 1;
+    };
+    render();
+    emailCodeCooldownTimer = setInterval(render, 1000);
+}
+
+async function sendEmailCode(){
+    const email = (loginEmailInput?.value || '').trim();
+    if(!email) {
+        setEmailLoginHint(L('请输入邮箱','Enter your email'), true);
+        loginEmailInput?.focus();
+        return;
+    }
+    try {
+        sendEmailCodeBtn.disabled = true;
+        setEmailLoginHint(L('正在发送验证码……','Sending verification code...'));
+        const res = await fetch('/api/auth/email/start', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email})
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || 'send failed');
+        setEmailLoginHint(L('验证码已发送，请检查邮箱。','Code sent. Check your inbox.'));
+        loginCodeInput?.focus();
+        setEmailCodeCooldown(45);
+    } catch(err) {
+        console.error(err);
+        setEmailLoginHint(err.message || L('验证码发送失败','Failed to send code'), true);
+        if(sendEmailCodeBtn) sendEmailCodeBtn.disabled = false;
+    }
+}
+
+async function verifyEmailCode(){
+    const email = (loginEmailInput?.value || '').trim();
+    const code = (loginCodeInput?.value || '').trim();
+    if(!email || code.length < 6) {
+        setEmailLoginHint(L('请输入邮箱和 6 位验证码','Enter email and 6-digit code'), true);
+        return;
+    }
+    try {
+        verifyEmailCodeBtn.disabled = true;
+        setEmailLoginHint(L('正在登录……','Signing in...'));
+        const res = await fetch('/api/auth/email/verify', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email, code})
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || 'verify failed');
+        currentUser = data.user || null;
+        closeEmailLogin();
+        updateAuthUI();
+        await loadHomeData();
+        showStatus(L('已登录','Signed in'));
+    } catch(err) {
+        console.error(err);
+        setEmailLoginHint(err.message || L('登录失败','Sign in failed'), true);
+    } finally {
+        if(verifyEmailCodeBtn) verifyEmailCodeBtn.disabled = false;
+    }
+}
+
+async function logout(){
+    try { await fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
+    currentUser = null;
+    projects = [];
+    canvases = [];
+    updateAuthUI();
+    renderRecent();
+    showStatus(L('已退出登录','Logged out'));
+}
+
+function requireLogin(){
+    if(currentUser && currentUser.id) return true;
+    showStatus(L('请先登录','Please sign in first'));
+    openEmailLogin();
+    return false;
+}
 window.addEventListener('message', handleHostMessage);
 
 function initialHomeParams(){
@@ -298,6 +462,7 @@ function openCanvas(canvas){
 }
 
 async function createCanvasInProject({title, projectId, prompt='', mode=currentMode}={}){
+    if(!requireLogin()) throw new Error('auth required');
     const payload = {
         title: title || L('新画布','New canvas'),
         icon: mode === 'text' ? 'sparkles' : 'layers',
@@ -312,12 +477,17 @@ async function createCanvasInProject({title, projectId, prompt='', mode=currentM
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload)
         });
+        if(isAuthError(res)) {
+            currentUser = null;
+            updateAuthUI();
+            throw new Error('auth required');
+        }
         if(!res.ok) throw new Error('create canvas failed');
         const data = await res.json();
-        return persistLocalCanvas(data.canvas || payload);
+        return data.canvas || payload;
     } catch(err) {
-        console.warn('using local canvas fallback', err);
-        return createLocalCanvas({title: payload.title, projectId: payload.project, mode});
+        console.error(err);
+        throw err;
     }
 }
 
@@ -326,6 +496,7 @@ async function startCreativeProject(prompt='', mode=currentMode){
         openShellPage('asset-manager');
         return;
     }
+    if(!requireLogin()) return;
     startBtn.disabled = true;
     showStatus(L('正在创建画布…','Creating canvas...'));
     try {
@@ -338,12 +509,17 @@ async function startCreativeProject(prompt='', mode=currentMode){
                 headers:{'Content-Type':'application/json'},
                 body:JSON.stringify({name: projectName})
             });
+            if(isAuthError(projectRes)) {
+                currentUser = null;
+                updateAuthUI();
+                throw new Error('auth required');
+            }
             if(!projectRes.ok) throw new Error('create project failed');
             const projectData = await projectRes.json();
-            project = persistLocalProject(projectData.project || {});
+            project = projectData.project || {};
         } catch(projectErr) {
-            console.warn('using local project fallback', projectErr);
-            project = createLocalProject(projectName);
+            console.error(projectErr);
+            throw projectErr;
         }
         const canvas = await createCanvasInProject({
             title: nameSeed || L('新画布','New canvas'),
@@ -440,6 +616,7 @@ function startProjectRename(projectId){
 }
 
 async function renameProject(projectId, name){
+    if(!requireLogin()) return;
     const project = projects.find(p => p.id === projectId);
     const prevName = project?.name;
     if(project) project.name = name;
@@ -451,17 +628,23 @@ async function renameProject(projectId, name){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name})
         });
+        if(isAuthError(res)) {
+            currentUser = null;
+            updateAuthUI();
+            throw new Error('auth required');
+        }
         if(!res.ok) throw new Error('rename project failed');
         await loadHomeData();
     } catch(err){
         console.error(err);
-        if(project) persistLocalProject({...project, name, updated_at:Date.now()});
-        showStatus(L('项目已重命名','Project renamed'));
+        if(project && prevName != null) project.name = prevName;
+        showStatus(L('重命名失败，请稍后重试','Rename failed, please retry'));
         loadHomeData();
     }
 }
 
 async function deleteProject(projectId){
+    if(!requireLogin()) return;
     const project = projects.find(p => p.id === projectId);
     if(!project || projectId === 'default') return;
     pendingDeleteProjectId = null;
@@ -469,6 +652,11 @@ async function deleteProject(projectId){
     showStatus(L('正在删除项目…','Deleting project...'));
     try {
         const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {method:'DELETE'});
+        if(isAuthError(res)) {
+            currentUser = null;
+            updateAuthUI();
+            throw new Error('auth required');
+        }
         if(!res.ok) throw new Error('delete project failed');
         canvases.forEach(canvas => {
             if((canvas.project || 'default') === projectId) canvas.project = 'default';
@@ -481,16 +669,21 @@ async function deleteProject(projectId){
         showStatus(L('项目已删除','Project deleted'));
     } catch(err){
         console.error(err);
-        writeLocalArray(LOCAL_PROJECTS_KEY, readLocalArray(LOCAL_PROJECTS_KEY).filter(item => item.id !== projectId));
-        writeLocalArray(LOCAL_CANVASES_KEY, readLocalArray(LOCAL_CANVASES_KEY).map(item => (item.project || 'default') === projectId ? {...item, project:'default'} : item));
-        projects = projects.filter(p => p.id !== projectId);
-        canvases = canvases.map(item => (item.project || 'default') === projectId ? {...item, project:'default'} : item);
-        renderRecent();
-        showStatus(L('项目已删除','Project deleted'));
+        await loadHomeData();
+        showStatus(L('删除失败，请稍后重试','Delete failed, please retry'));
     }
 }
 
 function renderRecent(){
+    if(!currentUser) {
+        recentGrid.innerHTML = `<button class="project-card new" type="button" data-auth-login>
+            <div class="project-preview"><span class="plus">+</span></div>
+            <div class="project-meta"><p class="project-name">${L('邮箱登录后开始','Sign in with email')}</p><p class="project-sub">${L('登录后项目会按用户隔离保存','Projects are private after sign-in')}</p></div>
+        </button>`;
+        recentGrid.querySelector('[data-auth-login]')?.addEventListener('click', openEmailLogin);
+        refreshIcons();
+        return;
+    }
     const recentProjects = projects
         .filter(project => project.id !== 'default')
         .slice()
@@ -591,19 +784,33 @@ function renderRecent(){
 }
 
 async function loadHomeData(){
+    if(!currentUser) {
+        projects = [];
+        canvases = [];
+        renderRecent();
+        return;
+    }
     try {
         const [projectRes, canvasRes] = await Promise.all([fetch('/api/projects'), fetch('/api/canvases')]);
+        if(isAuthError(projectRes) || isAuthError(canvasRes)) {
+            currentUser = null;
+            updateAuthUI();
+            projects = [];
+            canvases = [];
+            renderRecent();
+            return;
+        }
         const remoteProjects = projectRes.ok ? (await projectRes.json()).projects || [] : [];
         const remoteCanvases = canvasRes.ok ? (await canvasRes.json()).canvases || [] : [];
-        projects = mergeById(remoteProjects, readLocalArray(LOCAL_PROJECTS_KEY)).filter(p => p.id !== 'default');
-        canvases = mergeById(remoteCanvases, readLocalArray(LOCAL_CANVASES_KEY));
+        projects = remoteProjects.filter(p => p.id !== 'default');
+        canvases = remoteCanvases;
         renderRecent();
     } catch(err){
         console.error(err);
-        projects = readLocalArray(LOCAL_PROJECTS_KEY).filter(p => p.id !== 'default');
-        canvases = readLocalArray(LOCAL_CANVASES_KEY);
+        projects = [];
+        canvases = [];
         renderRecent();
-        showStatus(L('已使用本地项目数据','Using local project data'));
+        showStatus(L('项目加载失败，请稍后重试','Failed to load projects'));
     }
 }
 
@@ -628,8 +835,18 @@ document.getElementById('attachBtn')?.addEventListener('click', () => openShellP
 if(window.StudioI18n) StudioI18n.apply();
 applyHomeStaticCopy();
 setMode('text');
-renderLocalHomeData();
-loadHomeData();
+emailLoginBtn?.addEventListener('click', openEmailLogin);
+sendEmailCodeBtn?.addEventListener('click', sendEmailCode);
+emailLoginForm?.addEventListener('submit', event => {
+    event.preventDefault();
+    verifyEmailCode();
+});
+emailLoginModal?.querySelectorAll('[data-close-email-login]').forEach(el => el.addEventListener('click', closeEmailLogin));
+loginCodeInput?.addEventListener('input', () => {
+    loginCodeInput.value = loginCodeInput.value.replace(/\D/g, '').slice(0, 6);
+});
+homeLogoutBtn?.addEventListener('click', logout);
+loadCurrentUser().then(loadHomeData);
 if(initialHomeParams().get('section') === 'projects') focusProjectsSection();
 syncHomeHeaderControls();
 refreshIcons();

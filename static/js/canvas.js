@@ -396,6 +396,14 @@ const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
 const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
 const CANVAS_COLOR_OPTIONS = ['red','orange','amber','green','teal','blue','violet','pink','slate'];
 
+function isAuthResponse(res){
+    return res && (res.status === 401 || res.status === 403);
+}
+
+function redirectToLogin(){
+    window.location.href = '/';
+}
+
 function readLocalArray(key){
     try {
         const value = JSON.parse(localStorage.getItem(key) || '[]');
@@ -1699,6 +1707,11 @@ async function saveCanvas(){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload)
         });
+        if(isAuthResponse(res)){
+            setStatus('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(res.status === 409){
             const data = await res.json().catch(() => ({}));
             const remote = data.detail?.canvas || data.canvas;
@@ -1788,9 +1801,16 @@ function msChatModelOptions(selected){
 async function loadCanvasList(openFirst=true){
     try {
         const res = await fetch('/api/canvases');
+        if(isAuthResponse(res)){
+            canvases = [];
+            renderCanvasList();
+            setStatus('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(!res.ok) throw new Error(tr('canvas.canvasListFailed'));
         const data = await res.json();
-        canvases = mergeById(data.canvases || [], readLocalArray(LOCAL_CANVASES_KEY).map(localCanvasRecord).filter(Boolean));
+        canvases = data.canvases || [];
         sortCanvasListByUpdated();
         refreshGateViewControls();
         renderCanvasList();
@@ -1811,6 +1831,11 @@ async function loadCanvasList(openFirst=true){
 async function loadTrashList(){
     try {
         const res = await fetch('/api/canvases/trash');
+        if(isAuthResponse(res)){
+            setStatus('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(!res.ok) throw new Error(tr('canvas.trashLoadFailed'));
         const data = await res.json();
         deletedCanvases = data.canvases || [];
@@ -2139,9 +2164,13 @@ async function createCanvas(){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({title, icon:isSmart ? 'sparkles' : '🧩', kind:isSmart ? 'smart' : 'classic'})
         });
+        if(isAuthResponse(res)){
+            setStatus('Please sign in');
+            redirectToLogin();
+            return;
+        }
         if(!res.ok) throw new Error(tr('canvas.createFailed'));
         const data = await res.json();
-        persistLocalCanvas(data.canvas);
         if(isSmart){
             setCreateMode(false);
             await loadCanvasList(false);
@@ -2309,9 +2338,13 @@ async function openCanvas(id){
         let data = null;
         try {
             const res = await fetch(`/api/canvases/${id}`);
+            if(isAuthResponse(res)){
+                setStatus('Please sign in');
+                redirectToLogin();
+                return;
+            }
             if(!res.ok) throw new Error(tr('canvas.openFailed'));
             data = await res.json();
-            if(data.canvas) persistLocalCanvas(data.canvas);
         } catch(remoteErr) {
             const local = loadLocalCanvas(id);
             if(!local) throw remoteErr;
