@@ -552,9 +552,8 @@ function canvasUrl(canvas, opts={}){
     });
     if(opts.prompt) params.set('initial_prompt', opts.prompt);
     if(opts.mode) params.set('initial_mode', opts.mode);
-    return canvas.kind === 'smart'
-        ? `/static/smart-canvas.html?${params.toString()}`
-        : `/static/canvas.html?${params.toString()}`;
+    // 自 2026.08 起经典画布是唯一画布引擎，所有画布统一打开经典画布。
+    return `/static/canvas.html?${params.toString()}`;
 }
 
 function openCanvas(canvas){

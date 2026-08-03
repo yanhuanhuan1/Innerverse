@@ -978,9 +978,8 @@ function canvasAssetsForCategory(categoryId=activeCanvasAssetCategory){
 function canvasAssetOpenUrl(canvas){
     if(!canvas?.id) return '';
     const id = encodeURIComponent(canvas.id);
-    return canvas.kind === 'smart'
-        ? `/static/smart-canvas.html?id=${id}&v=2026.07.30.0924`
-        : `/static/canvas.html?id=${id}&v=2026.07.30.0924`;
+    // 自 2026.08 起经典画布是唯一画布引擎，所有画布统一打开经典画布。
+    return `/static/canvas.html?id=${id}&v=2026.07.30.0924`;
 }
 function activeCanvasAssetCanvas(){
     if(!activeCanvasAssetCanvasId) return null;

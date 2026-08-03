@@ -2220,11 +2220,12 @@ async function createCanvas(){
     }
 }
 async function createSmartCanvas(){
-    setCreateMode(true, 'smart');
+    // 智能画布已移除（2026.08），入口统一为经典画布。
+    setCreateMode(true, 'classic');
 }
 function openSmartCanvasPage(id){
     if(!id) return;
-    window.location.href = `/static/smart-canvas.html?id=${encodeURIComponent(id)}&v=2026.07.30.0924`;
+    window.location.href = `/static/canvas.html?id=${encodeURIComponent(id)}&v=2026.07.30.0924`;
 }
 function toggleEmojiPicker(id, event){
     event?.preventDefault();
