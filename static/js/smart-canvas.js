@@ -1186,8 +1186,8 @@ function rememberCanvasListProject(projectId){
     return pid;
 }
 function canvasListUrlForProject(projectId){
-    const pid = rememberCanvasListProject(projectId);
-    return `/static/canvas-list.html?project=${encodeURIComponent(pid)}`;
+    rememberCanvasListProject(projectId);
+    return '/static/home.html?section=projects';
 }
 function backToCanvasList(){
     savePromptDraftForCurrent();

@@ -4926,7 +4926,7 @@ def codex_decode_output(stdout, stderr):
 async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output_last_message=True):
     exe = codex_cli_executable()
     if not exe:
-        raise HTTPException(status_code=400, detail="未找到 OpenAI Codex CLI。请先运行 CLI/windows/openai/install_openai_codex_cli.bat，并完成 codex 登录。")
+        raise HTTPException(status_code=400, detail="未找到可用的本地 CLI。当前线上版本不提供本地 CLI 安装包。")
     image_paths = [str(path) for path in (image_paths or []) if path and os.path.isfile(str(path))]
     last_path = ""
     args = [
@@ -5722,7 +5722,7 @@ async def generate_gemini_cli_provider_image(prompt, size, model, reference_imag
             f"任务：{prompt}\n\n"
             f"{gemini_cli_image_size_instruction(size, size_context)}\n"
             f"{ref_text}\n\n"
-            f"如果当前 Antigravity CLI/模型支持图片生成或图片编辑，请把最终图片保存到这个本地目录：{OUTPUT_OUTPUT_DIR}\n"
+            f"如果当前模型支持图片生成或图片编辑，请把最终图片保存到这个本地目录：{OUTPUT_OUTPUT_DIR}\n"
             "文件格式优先 png 或 jpg。只输出最终文件路径和一句简短说明；不要修改项目代码，不要创建额外文档。\n"
             "如果你无法真正创建图片文件，请在 60 秒内直接回复“无法生成图片文件”，不要只写计划，也不要持续尝试。"
         )

@@ -1870,7 +1870,7 @@ async function setTrashMode(active){
     refreshIcons();
 }
 function renderCanvasList(){
-    // 选画布 gate 已拆分到独立页面 canvas-list.html；编辑器页不再有该 DOM，调用直接跳过。
+    // 编辑器页不再包含选画布 gate DOM，调用直接跳过。
     if(!gateCanvasList) return;
     renderCanvasListInto(gateCanvasList);
 }
@@ -2636,7 +2636,7 @@ window.loadCanvasList = loadCanvasList;
 window.openCanvas = openCanvas;
 window.deleteCanvas = deleteCanvas;
 window.returnToCanvasManager = returnToCanvasManager;
-// 选画布 gate 已拆分到 canvas-list.html；编辑器页不再含这些元素，用可选链避免空引用报错。
+// 编辑器页不再含选画布 gate 元素，用可选链避免空引用报错。
 gateCreateBtn?.addEventListener('click', () => setCreateMode(true));
 gateCreateSmartBtn?.addEventListener('click', createSmartCanvas);
 gateBackBtn?.addEventListener('click', () => setTrashMode(false));
