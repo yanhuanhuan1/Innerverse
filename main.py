@@ -38,6 +38,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+import storage_r2
+import storage_db
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -2545,10 +2547,14 @@ def _model_payload_dict(payload):
     return payload
 
 def _save_canvas_task_record(task: Dict[str, Any]) -> None:
+    safe_task = json.loads(json.dumps(task, ensure_ascii=False, default=str))
+    task_id = safe_task.get("id", "")
+    if storage_db.is_configured():
+        if storage_db.kv_set("canvas_tasks", task_id, safe_task):
+            return
     try:
         os.makedirs(CANVAS_TASK_DIR, exist_ok=True)
-        safe_task = json.loads(json.dumps(task, ensure_ascii=False, default=str))
-        target = _canvas_task_path(safe_task.get("id", ""))
+        target = _canvas_task_path(task_id)
         temp_path = f"{target}.{uuid.uuid4().hex}.tmp"
         with open(temp_path, "w", encoding="utf-8") as handle:
             json.dump(safe_task, handle, ensure_ascii=False, indent=2)
@@ -2557,6 +2563,9 @@ def _save_canvas_task_record(task: Dict[str, Any]) -> None:
         logging.warning("Failed to persist canvas task %s: %s", task.get("id"), exc)
 
 def _load_canvas_task_record(task_id: str) -> Optional[Dict[str, Any]]:
+    if storage_db.is_configured():
+        data = storage_db.kv_get("canvas_tasks", task_id)
+        return data if isinstance(data, dict) else None
     try:
         path = _canvas_task_path(task_id)
         if not os.path.exists(path):
@@ -3276,17 +3285,37 @@ def list_conversations(user_id):
         })
     return sorted(records, key=lambda item: item["updated_at"], reverse=True)
 
-def canvas_path(canvas_id):
+def canvas_id_clean(canvas_id):
     cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", canvas_id or "")
     if not cleaned:
         raise HTTPException(status_code=400, detail="无效的画布 ID")
-    return os.path.join(CANVAS_DIR, f"{cleaned}.json")
+    return cleaned
+
+def canvas_path(canvas_id):
+    return os.path.join(CANVAS_DIR, f"{canvas_id_clean(canvas_id)}.json")
+
+def canvas_write_raw(canvas):
+    """写入画布数据，不修改 updated_at（供仅改元数据、不想把画布顶到列表最前的场景使用）。"""
+    cleaned = canvas_id_clean(canvas.get("id"))
+    if storage_db.is_configured():
+        if storage_db.kv_set("canvases", cleaned, canvas):
+            return
+    with open(canvas_path(cleaned), 'w', encoding='utf-8') as f:
+        json.dump(canvas, f, ensure_ascii=False, indent=2)
+
+def canvas_delete_raw(canvas_id):
+    cleaned = canvas_id_clean(canvas_id)
+    if storage_db.is_configured():
+        if storage_db.kv_delete("canvases", cleaned):
+            return
+    path = canvas_path(cleaned)
+    if os.path.exists(path):
+        os.remove(path)
 
 def save_canvas(canvas):
     with CANVAS_LOCK:
         canvas["updated_at"] = max(now_ms(), int(canvas.get("updated_at") or 0) + 1)
-        with open(canvas_path(canvas["id"]), 'w', encoding='utf-8') as f:
-            json.dump(canvas, f, ensure_ascii=False, indent=2)
+        canvas_write_raw(canvas)
 
 def normalize_canvas_kind(kind="classic"):
     return "smart" if str(kind or "").strip().lower() == "smart" else "classic"
@@ -3296,6 +3325,10 @@ PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
 DEFAULT_PROJECT_ID = "default"
 
 def load_projects():
+    if storage_db.is_configured():
+        data = storage_db.kv_get("meta", "projects")
+        projects = (data or {}).get("projects") if isinstance(data, dict) else None
+        return [p for p in projects if isinstance(p, dict) and p.get("id")] if isinstance(projects, list) else []
     try:
         with open(PROJECTS_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -3308,6 +3341,9 @@ def load_projects():
 
 def save_projects(projects):
     with CANVAS_LOCK:
+        if storage_db.is_configured():
+            if storage_db.kv_set("meta", "projects", {"projects": projects}):
+                return
         with open(PROJECTS_PATH, 'w', encoding='utf-8') as f:
             json.dump({"projects": projects}, f, ensure_ascii=False, indent=2)
 
@@ -3380,22 +3416,24 @@ def new_canvas(title="未命名画布", icon="layers", kind="classic", project=N
     save_canvas(canvas)
     return canvas
 
-def load_canvas(canvas_id):
-    path = canvas_path(canvas_id)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="画布不存在")
-    with open(path, 'r', encoding='utf-8') as f:
-        canvas = json.load(f)
-    if canvas.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="画布已在回收站")
-    return canvas
-
 def load_canvas_any(canvas_id):
-    path = canvas_path(canvas_id)
+    cleaned = canvas_id_clean(canvas_id)
+    if storage_db.is_configured():
+        canvas = storage_db.kv_get("canvases", cleaned)
+        if not isinstance(canvas, dict):
+            raise HTTPException(status_code=404, detail="画布不存在")
+        return canvas
+    path = canvas_path(cleaned)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="画布不存在")
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+def load_canvas(canvas_id):
+    canvas = load_canvas_any(canvas_id)
+    if canvas.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="画布已在回收站")
+    return canvas
 
 CANVAS_COLORS = {"", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink", "slate"}
 
@@ -3421,9 +3459,33 @@ def canvas_record(data):
         "node_count": len(data.get("nodes", [])),
     }
 
+def iter_all_canvas_data():
+    """Yield every raw canvas dict, from Postgres if configured, else scanning CANVAS_DIR."""
+    if storage_db.is_configured():
+        for data in storage_db.kv_list("canvases"):
+            if isinstance(data, dict):
+                yield data
+        return
+    for filename in os.listdir(CANVAS_DIR):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as f:
+                yield json.load(f)
+        except Exception:
+            continue
+
 def cleanup_expired_canvas_trash():
     cutoff = now_ms() - CANVAS_TRASH_RETENTION_MS
     with CANVAS_LOCK:
+        if storage_db.is_configured():
+            for data in storage_db.kv_list("canvases"):
+                if not isinstance(data, dict):
+                    continue
+                deleted_at = int(data.get("deleted_at") or 0)
+                if deleted_at and deleted_at < cutoff:
+                    storage_db.kv_delete("canvases", canvas_id_clean(data.get("id")))
+            return
         for filename in os.listdir(CANVAS_DIR):
             if not filename.endswith(".json"):
                 continue
@@ -3440,14 +3502,7 @@ def cleanup_expired_canvas_trash():
 def iter_canvas_records(include_deleted=False):
     cleanup_expired_canvas_trash()
     records = []
-    for filename in os.listdir(CANVAS_DIR):
-        if not filename.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(CANVAS_DIR, filename), 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            continue
+    for data in iter_all_canvas_data():
         is_deleted = bool(data.get("deleted_at"))
         if include_deleted != is_deleted:
             continue
@@ -3578,14 +3633,7 @@ def canvas_assets_index():
     canvas_counts = {"all": 0, "smart": 0, "classic": 0}
     item_counts = {"all": 0, "smart": 0, "classic": 0}
     cleanup_expired_canvas_trash()
-    for filename in os.listdir(CANVAS_DIR):
-        if not filename.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as f:
-                canvas = json.load(f)
-        except Exception:
-            continue
+    for canvas in iter_all_canvas_data():
         if canvas.get("deleted_at"):
             continue
         record = canvas_record(canvas)
@@ -6493,11 +6541,30 @@ async def wait_for_image_task(client, task_id, provider=None):
 def output_storage(category="output"):
     return (OUTPUT_INPUT_DIR, "input") if category == "input" else (OUTPUT_OUTPUT_DIR, "output")
 
+def _r2_key_for_path(path):
+    """把本地文件路径映射为 R2 对象键，与 /assets 下的相对路径保持一致。"""
+    try:
+        abs_path = os.path.abspath(path)
+        assets_root = os.path.abspath(ASSETS_DIR)
+        rel = os.path.relpath(abs_path, assets_root).replace("\\", "/")
+        if not rel.startswith("../") and rel != "..":
+            return rel
+    except Exception:
+        pass
+    return None
+
 def output_url_for(filename, category="output"):
     folder, subdir = output_storage(category)
     rel = str(filename or "").replace("\\", "/").lstrip("/")
+    local_path = os.path.join(folder, rel)
+    if storage_r2.is_configured() and os.path.exists(local_path):
+        key = _r2_key_for_path(local_path) or f"{subdir}/{rel}"
+        if storage_r2.upload_file(key, local_path):
+            public_url = storage_r2.public_url_for(key)
+            if public_url:
+                return public_url
     try:
-        asset_rel = os.path.relpath(os.path.join(folder, rel), ASSETS_DIR).replace("\\", "/")
+        asset_rel = os.path.relpath(local_path, ASSETS_DIR).replace("\\", "/")
         if not asset_rel.startswith("../") and asset_rel != "..":
             return f"/assets/{urllib.parse.quote(asset_rel, safe='/')}"
     except Exception:
@@ -6509,6 +6576,27 @@ def output_path_for(filename, category="output"):
     folder, _ = output_storage(category)
     return os.path.join(folder, filename)
 
+def _r2_delete_for_path(path):
+    """若该本地路径对应一个 R2 对象键，同步删除远端副本（忽略失败，不影响本地删除主流程）。"""
+    if not storage_r2.is_configured():
+        return
+    key = _r2_key_for_path(path)
+    if key:
+        try:
+            storage_r2.delete_object(key)
+        except Exception:
+            pass
+
+def asset_library_public_url(local_path, rel):
+    """资产库文件的对外 URL：R2 已配置时上传并返回 CDN 地址，否则回落到 /assets/library/<rel>。"""
+    if storage_r2.is_configured() and os.path.exists(local_path):
+        key = f"library/{rel}"
+        if storage_r2.upload_file(key, local_path):
+            public_url = storage_r2.public_url_for(key)
+            if public_url:
+                return public_url
+    return "/assets/library/" + urllib.parse.quote(rel, safe="/")
+
 def storage_kind_dir(kind):
     kind = str(kind or "").strip().lower()
     if kind == "upload":
@@ -6518,6 +6606,35 @@ def storage_kind_dir(kind):
     if kind == "local":
         return os.path.abspath(LOCAL_UPLOAD_DIR)
     raise HTTPException(status_code=404, detail="未知存储目录")
+
+def _r2_hydrate_local(path):
+    """若本地文件不存在但配置了 R2，尝试从 R2 拉取一份到本地缓存路径（无状态实例的懒加载）。"""
+    if not path or os.path.exists(path):
+        return os.path.exists(path)
+    if not storage_r2.is_configured():
+        return False
+    key = _r2_key_for_path(path)
+    if not key:
+        return False
+    return storage_r2.download_to_file(key, path)
+
+def _r2_local_path_from_public_url(url):
+    """把 R2 公共 CDN 地址映射回本地缓存路径（键与 /assets 下相对路径一一对应）。"""
+    base = storage_r2.public_base_url()
+    if not base or not str(url or "").startswith(base + "/"):
+        return None
+    key = urllib.parse.unquote(str(url)[len(base) + 1:].split("?", 1)[0])
+    key = key.replace("\\", "/").lstrip("/")
+    if not key:
+        return None
+    path = os.path.abspath(os.path.join(ASSETS_DIR, key))
+    assets_root = os.path.abspath(ASSETS_DIR)
+    try:
+        if os.path.commonpath([assets_root, path]) != assets_root:
+            return None
+    except ValueError:
+        return None
+    return path
 
 def storage_file_path(kind, rel):
     root = storage_kind_dir(kind)
@@ -6531,13 +6648,16 @@ def storage_file_path(kind, rel):
             raise HTTPException(status_code=400, detail="非法文件路径")
     except ValueError:
         raise HTTPException(status_code=400, detail="非法文件路径")
-    return path if os.path.exists(path) else None
+    return path if _r2_hydrate_local(path) else None
 
 def output_file_from_url(url):
     if isinstance(url, dict):
         url = url.get("url", "")
     if not url:
         return None
+    r2_local = _r2_local_path_from_public_url(url)
+    if r2_local:
+        return r2_local if _r2_hydrate_local(r2_local) else None
     clean = urllib.parse.unquote(url.split("?", 1)[0]).replace("\\", "/")
     if clean.startswith("/api/storage-files/"):
         rest = clean[len("/api/storage-files/"):].lstrip("/")
@@ -6557,7 +6677,7 @@ def output_file_from_url(url):
     for root in roots:
         path = os.path.abspath(os.path.join(root, rel))
         output_root = os.path.abspath(root)
-        if os.path.commonpath([output_root, path]) == output_root and os.path.exists(path):
+        if os.path.commonpath([output_root, path]) == output_root and _r2_hydrate_local(path):
             return path
     return None
 
@@ -6646,8 +6766,13 @@ def persisted_json_references_media_path(target_path: str) -> bool:
     # Generation history is an index of outputs, not an owner. When an output
     # is deleted we prune its history card separately so this index cannot pin
     # every generated file forever.
+    if storage_db.is_configured():
+        for canvas in iter_all_canvas_data():
+            if json_references_media_path(canvas, target_path):
+                return True
     candidates = [ASSET_LIBRARY_PATH]
-    for root in (CANVAS_DIR, CONVERSATION_DIR):
+    trash_roots = (CONVERSATION_DIR,) if storage_db.is_configured() else (CANVAS_DIR, CONVERSATION_DIR)
+    for root in trash_roots:
         if os.path.isdir(root):
             for current, _, files in os.walk(root):
                 candidates.extend(os.path.join(current, name) for name in files if name.lower().endswith(".json"))
@@ -6901,6 +7026,7 @@ async def delete_storage_files(payload: Dict[str, Any]):
         if not path or not os.path.isfile(path):
             continue
         try:
+            _r2_delete_for_path(path)
             os.remove(path)
             removed += 1
         except OSError:
@@ -7291,6 +7417,7 @@ def remove_asset_library_file(item) -> None:
         url = item.get("url") if isinstance(item, dict) else ""
         path = output_file_from_url(url)
         if path and os.path.isfile(path):
+            _r2_delete_for_path(path)
             os.remove(path)
     except Exception as exc:
         print(f"删除资产文件失败: {exc}")
@@ -7315,7 +7442,7 @@ def make_asset_library_item(src: str, name: str = "", subdir: str = "") -> Tuple
     item = {
         "id": f"asset_{uuid.uuid4().hex[:12]}",
         "name": os.path.splitext(safe_name)[0][:120],
-        "url": "/assets/library/" + urllib.parse.quote(rel, safe="/"),
+        "url": asset_library_public_url(dest_path, rel),
         "kind": kind,
         "created_at": now_ms(),
     }
@@ -7544,7 +7671,7 @@ def migrate_asset_library_into_dirs():
                 try:
                     if not os.path.exists(dst):
                         shutil.move(src, dst)
-                    item["url"] = "/assets/library/" + urllib.parse.quote(f"{cat_dir}/{fname}", safe="/")
+                    item["url"] = asset_library_public_url(dst, f"{cat_dir}/{fname}")
                     changed = True
                 except Exception as exc:
                     print(f"资产库分组整理：搬运 {fname} 失败 {exc}")
@@ -7591,7 +7718,7 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
     return {
         "id": f"wf_{uuid.uuid4().hex[:12]}",
         "name": display_name[:120],
-        "url": f"/assets/library/{dest_name}",
+        "url": asset_library_public_url(dest_path, dest_name),
         "kind": "workflow",
         "type": "workflow",
         "format": "zip" if ext == ".zip" else "json",
@@ -8052,6 +8179,11 @@ def convert_output_to_jpg(url, quality=88):
             else:
                 img = img.convert("RGB")
             img.save(jpg_path, "JPEG", quality=quality, optimize=True)
+        key = _r2_key_for_path(jpg_path)
+        if storage_r2.is_configured() and key and storage_r2.upload_file(key, jpg_path):
+            public_url = storage_r2.public_url_for(key)
+            if public_url:
+                return public_url
         try:
             root = ASSETS_DIR if os.path.commonpath([os.path.abspath(ASSETS_DIR), os.path.abspath(jpg_path)]) == os.path.abspath(ASSETS_DIR) else OUTPUT_DIR
         except ValueError:
@@ -15921,19 +16053,10 @@ async def delete_project(project_id: str):
     # 把该项目下的画布迁回默认项目
     moved = 0
     with CANVAS_LOCK:
-        for filename in os.listdir(CANVAS_DIR):
-            if not filename.endswith(".json"):
-                continue
-            path = os.path.join(CANVAS_DIR, filename)
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            except Exception:
-                continue
+        for data in iter_all_canvas_data():
             if str(data.get("project") or "") == project_id:
                 data["project"] = DEFAULT_PROJECT_ID
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                canvas_write_raw(data)
                 moved += 1
     return {"ok": True, "moved": moved}
 
@@ -15979,8 +16102,7 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
                 canvas["board_x"] = float(payload.board_x)
             if payload.board_y is not None:
                 canvas["board_y"] = float(payload.board_y)
-            with open(canvas_path(canvas["id"]), 'w', encoding='utf-8') as f:
-                json.dump(canvas, f, ensure_ascii=False, indent=2)
+            canvas_write_raw(canvas)
             return canvas
 
     canvas = await asyncio.to_thread(mutate_meta)
@@ -17180,6 +17302,7 @@ async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
         for path in deletable_paths:
             try:
                 removed_previews += delete_media_preview_cache(path)
+                _r2_delete_for_path(path)
                 os.remove(path)
                 removed_files.append(os.path.basename(path))
             except OSError:
@@ -17234,9 +17357,7 @@ async def restore_canvas(canvas_id: str):
 async def purge_canvas(canvas_id: str):
     def purge():
         with CANVAS_LOCK:
-            path = canvas_path(canvas_id)
-            if os.path.exists(path):
-                os.remove(path)
+            canvas_delete_raw(canvas_id)
 
     await asyncio.to_thread(purge)
     return {"ok": True}
@@ -17836,6 +17957,7 @@ async def delete_history(req: DeleteHistoryRequest):
                 file_path = output_file_from_url(img_url)
                 if file_path and os.path.exists(file_path):
                     try:
+                        _r2_delete_for_path(file_path)
                         os.remove(file_path)
                     except Exception as e:
                         print(f"Failed to delete file {file_path}: {e}")
