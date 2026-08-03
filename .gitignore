@@ -40,11 +40,9 @@ data/update_staging/
 
 # Local tooling
 .vercel/
+.claude/
 .idea/
 .vscode/
 *.swp
 Thumbs.db
 .DS_Store
-.vercel
-.env*
-!.env.example
