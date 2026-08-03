@@ -1231,7 +1231,7 @@ async function generatorSizeForRun(gen, refs){
     return apiImageSize(ratio, gen.resolution || defaultApiImageResolution(gen.model), gen.customRatio || '', gen.customSize || '');
 }
 function isCanvasGeneratorSurface(node){
-    return ['comfy','video'].includes(node?.type);
+    return ['comfy','video','msgen','generator','rh','ltxDirector'].includes(node?.type);
 }
 function isCanvasGeneratorComposerOpen(node){
     return Boolean(node?.composerOpen);
@@ -3065,21 +3065,35 @@ function renderMsGenBody(node){
     const loraEnabled = Boolean(node.msLoraEnabled);
     const loraStrength = node.msLoraStrength ?? Number(selectedMsLora?.strength ?? 0.8);
     const msCount = Math.max(1, Math.min(8, Number(node.count || 1)));
+    const composerOpen = isCanvasGeneratorComposerOpen(node);
+    const hasInlineOutput = hasInlineGeneratedContent(node);
     wrap.innerHTML = `
-        <div class="ms-model-tabs">
-            ${Object.entries(MS_GEN_MODELS).map(([k,m]) =>
-                `<button type="button" data-model="${k}" class="${modelKey===k?'active':''}">${escapeHtml(m.labelKey ? tr(m.labelKey) : m.label)}</button>`
-            ).join('')}
-        </div>
-        <div class="ms-content">
-            <div class="prompt-list mt-2 mb-2"></div>
-            ${msUsesImages ? `
-            <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">${tr('canvas.images')}</div>
-            <div class="input-list ms-img-list"></div>
-            ` : ''}
-        </div>
-        <div class="ms-controls">
-            <div class="gen-settings">
+        <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
+            <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
+                <div class="canvas-gen-stage-head">
+                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i>Image</span>
+                    ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
+                </div>
+                <div class="canvas-gen-stage-content">
+                    <div class="input-list ms-img-list"></div>
+                </div>
+            </div>
+            <div class="canvas-gen-composer ${composerOpen ? 'is-open' : 'is-collapsed'}">
+                <div class="canvas-gen-composer-tools">
+                    <button type="button" class="canvas-gen-icon active" title="${escapeHtml(tr('canvas.modelscopeGenerate'))}"><i data-lucide="sparkles" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-tool-divider"></span>
+                    <button type="button" class="canvas-gen-icon" onclick="pickAndConnectUpload('${node.id}', event)" title="上传参考素材"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-mode-copy">${escapeHtml(tr('canvas.modelscopeGenerate'))}</span>
+                    <button type="button" class="canvas-gen-panel-close" data-close-composer title="${langIsEn() ? 'Collapse' : '收起'}"><i data-lucide="x" class="w-4 h-4"></i></button>
+                </div>
+                <div class="ms-model-tabs">
+                    ${Object.entries(MS_GEN_MODELS).map(([k,m]) =>
+                        `<button type="button" data-model="${k}" class="${modelKey===k?'active':''}">${escapeHtml(m.labelKey ? tr(m.labelKey) : m.label)}</button>`
+                    ).join('')}
+                </div>
+                <div class="prompt-list"></div>
+                <div class="ms-controls">
+                    <div class="gen-settings">
                 ${isCustomMs ? `
                 <div class="gen-settings-row">
                     <select class="select-lite ms-custom-model-select">${modelscopeImageModelOptions(node.msCustomModel)}</select>
@@ -3156,14 +3170,16 @@ function renderMsGenBody(node){
                     </label>
                 </div>` : ''}` : ''}
                 ${!msLoras.length ? `<div class="gen-settings-row"><div style="color:var(--faint);font-size:11px;font-weight:700;line-height:1.45">${tr('canvas.noLoraForModel')}</div></div>` : ''}
+                    </div>
+                    <div class="gen-run-row">
+                        <button class="gen-btn ${node.running?'running':''}" ${node.running?'disabled':''}>
+                            <i data-lucide="zap" class="w-4 h-4"></i>${node.running ? tr('canvas.generating') : tr('canvas.msGenerate')}
+                        </button>
+                        ${cascadeBtnHtml(node)}
+                    </div>
+                    ${retryBarHtml(node)}
+                </div>
             </div>
-            <div class="gen-run-row">
-                <button class="gen-btn ${node.running?'running':''}" ${node.running?'disabled':''}>
-                    <i data-lucide="zap" class="w-4 h-4"></i>${node.running ? tr('canvas.generating') : tr('canvas.msGenerate')}
-                </button>
-                ${cascadeBtnHtml(node)}
-            </div>
-            ${retryBarHtml(node)}
         </div>
     `;
     wrap.querySelectorAll('.ms-model-tabs button').forEach(btn => {
@@ -3381,6 +3397,14 @@ function renderMsGenBody(node){
         renderImageInputList(list, node, mediaInputs);
     }
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
+    const msStageContent = wrap.querySelector('.canvas-gen-stage-content');
+    if(msStageContent){
+        if(hasInlineOutput){
+            renderInlineGeneratedOutputs(msStageContent, node);
+        } else if(!msUsesImages){
+            msStageContent.innerHTML = canvasEmptyImageStageHtml();
+        }
+    }
     wrap.querySelector('.gen-btn').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
     bindCascadeButtons(wrap, node.id);
     bindCanvasInputPanelToggle(wrap, node);
@@ -6469,8 +6493,9 @@ function renderNode(node){
         e.preventDefault();
         e.stopPropagation();
     };
-    const title = node.title || (node.type === 'image' ? 'Image' : node.type === 'prompt' ? 'Prompt' : node.type === 'loop' ? tr('canvas.loopNode') : node.type === 'promptGroup' ? 'Prompts' : node.type === 'group' ? 'Group' : node.type === 'llm' ? 'LLM' : node.type === 'comfy' ? 'ComfyUI' : node.type === 'ltxDirector' ? tr('canvas.ltxDirector') : node.type === 'rh' ? 'RunningHub' : node.type === 'msgen' ? tr('canvas.modelscopeGenerate') : node.type === 'video' ? tr('canvas.videoGenerateNode') : tr('canvas.apiGenerate'));
-    const displayTitle = node.type === 'image' && node.url ? nodeTitleForMedia(node) : title;
+    // 节点左上角不再默认显示类型标签（image / prompt / ComfyUI 等），仅显示用户设置的标题。
+    const title = node.title || '';
+    const displayTitle = node.type === 'image' && node.url ? (node.title || '') : title;
     // 失败徽章只在一键运行模式中显示，单节点失败已通过 alert 提示
     const showStatus = ['generator','msgen','comfy','ltxDirector','llm','video','rh'].includes(node.type) && node.runStatus
         && (node.runStatus !== 'failed' || node._cascadeFailed);
@@ -8539,11 +8564,29 @@ function renderGeneratorBody(node){
     const promptInputs = ordered.filter(src => src.prompt && !src.refs?.length);
     sanitizeImageNodeProviderModel(node);
     normalizeApiNodeSizeChoice(node);
+    const composerOpen = isCanvasGeneratorComposerOpen(node);
+    const hasInlineOutput = hasInlineGeneratedContent(node);
     wrap.innerHTML = `
-        <div class="prompt-list mb-3"></div>
-        <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">${tr('canvas.images')}</div>
-        <div class="input-list"></div>
-        <div class="gen-settings">
+        <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
+            <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
+                <div class="canvas-gen-stage-head">
+                    <span><i data-lucide="sparkles" class="w-3.5 h-3.5"></i>Image</span>
+                    ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
+                </div>
+                <div class="canvas-gen-stage-content">
+                    <div class="input-list"></div>
+                </div>
+            </div>
+            <div class="canvas-gen-composer ${composerOpen ? 'is-open' : 'is-collapsed'}">
+                <div class="canvas-gen-composer-tools">
+                    <button type="button" class="canvas-gen-icon active" title="${escapeHtml(tr('canvas.apiGenerate'))}"><i data-lucide="sparkles" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-tool-divider"></span>
+                    <button type="button" class="canvas-gen-icon" onclick="pickAndConnectUpload('${node.id}', event)" title="上传参考素材"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-mode-copy">${escapeHtml(tr('canvas.apiGenerate'))}</span>
+                    <button type="button" class="canvas-gen-panel-close" data-close-composer title="${langIsEn() ? 'Collapse' : '收起'}"><i data-lucide="x" class="w-4 h-4"></i></button>
+                </div>
+                <div class="prompt-list mb-3"></div>
+                <div class="gen-settings">
             <div class="gen-settings-row">
                 <select class="select-lite provider-select">${providerOptions(node.apiProvider)}</select>
                 <select class="select-lite model-select">${imageModelOptions(node.model, node.apiProvider)}</select>
@@ -8604,12 +8647,14 @@ function renderGeneratorBody(node){
                 </label>
                 <button class="secondary-btn fit-size-btn" type="button" style="height:32px;align-self:flex-end;padding:0 10px;font-size:11px">${tr('canvas.fitImageSize')}</button>
             </div>
+                </div>
+                <div class="gen-run-row">
+                    <button class="gen-btn ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="zap" class="w-4 h-4"></i>${node.running ? tr('canvas.generating') : tr('canvas.apiGenerate')}</button>
+                    ${cascadeBtnHtml(node)}
+                </div>
+                ${retryBarHtml(node)}
+            </div>
         </div>
-        <div class="gen-run-row">
-            <button class="gen-btn ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="zap" class="w-4 h-4"></i>${node.running ? tr('canvas.generating') : tr('canvas.apiGenerate')}</button>
-            ${cascadeBtnHtml(node)}
-        </div>
-        ${retryBarHtml(node)}
     `;
     const providerSelect = wrap.querySelector('.provider-select');
     const modelSelect = wrap.querySelector('.model-select');
@@ -8841,6 +8886,10 @@ function renderGeneratorBody(node){
     const list = wrap.querySelector('.input-list');
     renderImageInputList(list, node, mediaInputs);
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
+    const genStageContent = wrap.querySelector('.canvas-gen-stage-content');
+    if(genStageContent && hasInlineOutput){
+        renderInlineGeneratedOutputs(genStageContent, node);
+    }
     wrap.querySelector('.gen-btn').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
     bindCascadeButtons(wrap, node.id);
     bindCanvasInputPanelToggle(wrap, node);
@@ -9907,12 +9956,32 @@ function renderRhBody(node){
     const selectedId = selectedRef?.id || (mode === 'workflow' ? (node.workflowId || '') : (node.webappId || ''));
     const selectedKey = selectedRef ? runningHubEntryKey(selectedRef.kind, selectedRef.id) : '';
     const entryNote = entry?.note || entry?.description || '';
+    const composerOpen = isCanvasGeneratorComposerOpen(node);
+    const hasInlineOutput = hasInlineGeneratedContent(node);
     if(mode === 'model'){
         node.model = selectedRef?.id || node.rhModel || node.model || '';
         normalizeApiNodeSizeChoice(node);
     }
     wrap.innerHTML = `
-        <div class="rh-top">
+        <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
+            <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
+                <div class="canvas-gen-stage-head">
+                    <span><i data-lucide="workflow" class="w-3.5 h-3.5"></i>Image</span>
+                    ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
+                </div>
+                <div class="canvas-gen-stage-content">
+                    <div class="input-list rh-input-list"></div>
+                </div>
+            </div>
+            <div class="canvas-gen-composer ${composerOpen ? 'is-open' : 'is-collapsed'}">
+                <div class="canvas-gen-composer-tools">
+                    <button type="button" class="canvas-gen-icon active" title="${escapeHtml(tr('canvas.rhRun'))}"><i data-lucide="workflow" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-tool-divider"></span>
+                    <button type="button" class="canvas-gen-icon" onclick="pickAndConnectUpload('${node.id}', event)" title="上传参考素材"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-mode-copy">${escapeHtml(tr('canvas.rhRun'))}</span>
+                    <button type="button" class="canvas-gen-panel-close" data-close-composer title="${langIsEn() ? 'Collapse' : '收起'}"><i data-lucide="x" class="w-4 h-4"></i></button>
+                </div>
+                <div class="rh-top">
             <label class="field rh-webapp-field">
                 <div class="setting-title">RunningHub 配置</div>
                 <select class="select-lite rh-entry-select">${rhEntryOptions(selectedKey)}</select>
@@ -9929,22 +9998,20 @@ function renderRhBody(node){
                 </select>
             </label>
         </div>
-        <div class="rh-prompt-list"></div>
-        <div class="rh-media-section">
-            <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">${tr('canvas.rhInputs')}</div>
-            <div class="input-list rh-input-list"></div>
+                <div class="rh-prompt-list"></div>
+                ${mode === 'model' ? rhModelSettingsHtml(node) : ''}
+                <div class="rh-param-head">
+                    <span>${mode === 'model' ? '模型 API 参数' : mode === 'workflow' ? tr('canvas.rhWorkflowParams') : tr('canvas.rhParams')}</span>
+                    <span>${fields.length}</span>
+                </div>
+                <div class="rh-param-list"></div>
+                <div class="gen-run-row">
+                    <button class="gen-btn rh-run ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="workflow" class="w-4 h-4"></i>${node.running ? tr('canvas.rhRunning') : tr('canvas.rhRun')}</button>
+                    ${cascadeBtnHtml(node)}
+                </div>
+                ${retryBarHtml(node)}
+            </div>
         </div>
-        ${mode === 'model' ? rhModelSettingsHtml(node) : ''}
-        <div class="rh-param-head">
-            <span>${mode === 'model' ? '模型 API 参数' : mode === 'workflow' ? tr('canvas.rhWorkflowParams') : tr('canvas.rhParams')}</span>
-            <span>${fields.length}</span>
-        </div>
-        <div class="rh-param-list"></div>
-        <div class="gen-run-row">
-            <button class="gen-btn rh-run ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="workflow" class="w-4 h-4"></i>${node.running ? tr('canvas.rhRunning') : tr('canvas.rhRun')}</button>
-            ${cascadeBtnHtml(node)}
-        </div>
-        ${retryBarHtml(node)}
     `;
     const entrySelect = wrap.querySelector('.rh-entry-select');
     if(entrySelect) entrySelect.onchange = e => {
@@ -9971,8 +10038,13 @@ function renderRhBody(node){
     renderRhInputs(wrap.querySelector('.rh-input-list'), node, media);
     renderRhParams(wrap.querySelector('.rh-param-list'), node, fields, media);
     if(mode === 'model') bindRhModelControls(wrap, node, media);
+    const rhStageContent = wrap.querySelector('.canvas-gen-stage-content');
+    if(rhStageContent && hasInlineOutput){
+        renderInlineGeneratedOutputs(rhStageContent, node);
+    }
     wrap.querySelector('.rh-run').onclick = e => { e.stopPropagation(); runCanvasGenerate(node.id); };
     bindCascadeButtons(wrap, node.id);
+    bindCanvasInputPanelToggle(wrap, node);
     refreshIcons();
     return wrap;
 }
@@ -12359,30 +12431,54 @@ function renderLTXDirectorBody(node){
     const imageInputs = sources
         .map(src => ({...src, refs:imageRefsOnly(src.refs || [])}))
         .filter(src => src.refs?.length);
+    const composerOpen = isCanvasGeneratorComposerOpen(node);
+    const hasInlineOutput = hasInlineGeneratedContent(node);
 
     wrap.innerHTML = `
-        <div class="prompt-list"></div>
-        <div class="ltx-params-row" data-ltx-params>
-            <label class="field"><span class="setting-title">${tr('canvas.ltxDurationSec')}</span><input class="setting-input" data-ltx-duration-seconds type="number" min="0.1" max="1000" step="0.01"></label>
-            <label class="field"><span class="setting-title">${tr('canvas.ltxDurationFrames')}</span><input class="setting-input" data-ltx-duration-frames type="number" min="1" max="10000" step="1"></label>
-            <label class="field"><span class="setting-title">${tr('canvas.ltxFps')}</span><input class="setting-input" data-ltx-frame-rate type="number" min="1" max="240" step="1"></label>
-            <label class="field"><span class="setting-title">${tr('canvas.width')}</span><input class="setting-input" data-ltx-width type="number" min="0" max="8192" step="32" title="0 = auto"></label>
-            <label class="field"><span class="setting-title">${tr('canvas.height')}</span><input class="setting-input" data-ltx-height type="number" min="0" max="8192" step="32" title="0 = auto"></label>
+        <div class="canvas-gen-shell ${composerOpen ? 'composer-open' : 'composer-closed'}">
+            <div class="canvas-gen-stage ${hasInlineOutput ? 'has-inline-output' : ''}" data-stage="Image">
+                <div class="canvas-gen-stage-head">
+                    <span><i data-lucide="film" class="w-3.5 h-3.5"></i>Image</span>
+                    ${hasInlineOutput ? `<span class="canvas-gen-output-count">${inlineGeneratedOutputItems(node).length || (node._pending || []).length}</span>` : ''}
+                </div>
+                <div class="canvas-gen-stage-content">
+                    <div class="input-list mt-1"></div>
+                </div>
+            </div>
+            <div class="canvas-gen-composer ${composerOpen ? 'is-open' : 'is-collapsed'}">
+                <div class="canvas-gen-composer-tools">
+                    <button type="button" class="canvas-gen-icon active" title="${escapeHtml(tr('canvas.ltxDirector'))}"><i data-lucide="film" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-tool-divider"></span>
+                    <button type="button" class="canvas-gen-icon" onclick="pickAndConnectUpload('${node.id}', event)" title="上传参考素材"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                    <span class="canvas-gen-mode-copy">${escapeHtml(tr('canvas.ltxDirector'))}</span>
+                    <button type="button" class="canvas-gen-panel-close" data-close-composer title="${langIsEn() ? 'Collapse' : '收起'}"><i data-lucide="x" class="w-4 h-4"></i></button>
+                </div>
+                <div class="prompt-list"></div>
+                <div class="ltx-params-row" data-ltx-params>
+                    <label class="field"><span class="setting-title">${tr('canvas.ltxDurationSec')}</span><input class="setting-input" data-ltx-duration-seconds type="number" min="0.1" max="1000" step="0.01"></label>
+                    <label class="field"><span class="setting-title">${tr('canvas.ltxDurationFrames')}</span><input class="setting-input" data-ltx-duration-frames type="number" min="1" max="10000" step="1"></label>
+                    <label class="field"><span class="setting-title">${tr('canvas.ltxFps')}</span><input class="setting-input" data-ltx-frame-rate type="number" min="1" max="240" step="1"></label>
+                    <label class="field"><span class="setting-title">${tr('canvas.width')}</span><input class="setting-input" data-ltx-width type="number" min="0" max="8192" step="32" title="0 = auto"></label>
+                    <label class="field"><span class="setting-title">${tr('canvas.height')}</span><input class="setting-input" data-ltx-height type="number" min="0" max="8192" step="32" title="0 = auto"></label>
+                </div>
+                <div class="ltx-director-timeline-host" data-ltx-timeline-host></div>
+                <div class="gen-run-row">
+                    <button class="comfy-run ltx-run ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="film" class="w-4 h-4"></i>${node.running ? tr('canvas.ltxRunning') : tr('canvas.ltxRun')}</button>
+                    ${cascadeBtnHtml(node)}
+                </div>
+                ${retryBarHtml(node)}
+            </div>
         </div>
-        <div class="ltx-director-timeline-host" data-ltx-timeline-host></div>
-        <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">${tr('canvas.ltxLinkedImages')} · ${imageInputs.length}</div>
-        <div class="input-list mt-1"></div>
-        <div class="gen-run-row">
-            <button class="comfy-run ltx-run ${node.running ? 'running' : ''}" ${node.running ? 'disabled' : ''}><i data-lucide="film" class="w-4 h-4"></i>${node.running ? tr('canvas.ltxRunning') : tr('canvas.ltxRun')}</button>
-            ${cascadeBtnHtml(node)}
-        </div>
-        ${retryBarHtml(node)}
     `;
 
     renderPromptPreview(wrap.querySelector('.prompt-list'), promptInputs);
     bindLTXParamsRow(wrap, node);
     ltxSyncConnectedImagesToTimeline(node);
     renderComfyImages(wrap.querySelector('.input-list'), node, imageInputs);
+    const ltxStageContent = wrap.querySelector('.canvas-gen-stage-content');
+    if(ltxStageContent && hasInlineOutput){
+        renderInlineGeneratedOutputs(ltxStageContent, node);
+    }
 
     const host = wrap.querySelector('[data-ltx-timeline-host]');
     if(host && window.CanvasLTXTimelineEditor){
@@ -12417,6 +12513,7 @@ function renderLTXDirectorBody(node){
         };
     }
     bindCascadeButtons(wrap, node.id);
+    bindCanvasInputPanelToggle(wrap, node);
     return wrap;
 }
 async function runLTXDirectorNode(nodeId, opts={}){

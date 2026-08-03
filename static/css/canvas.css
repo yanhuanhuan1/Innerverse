@@ -510,6 +510,7 @@ body.canvas-selecting .node .llm-bubble { pointer-events:none !important; }
 .node.sized.generator-node .generator-body { height:100%; display:flex; flex-direction:column; }
 .node.sized.rh-node .node-body { overflow:auto; }
 .rh-body { min-height:0; display:flex; flex-direction:column; gap:8px; }
+.node.sized.rh-node .rh-body { height:100%; display:flex; flex-direction:column; }
 .rh-mode-tabs { flex:0 0 auto; }
 .rh-top { display:grid; grid-template-columns:minmax(0,1fr) 116px 68px; gap:7px; align-items:end; flex:0 0 auto; }
 .rh-webapp-field { flex:1; min-width:0; }
