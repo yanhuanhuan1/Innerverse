@@ -301,6 +301,7 @@ DATA_DIR = os.path.join(RUNTIME_DATA_ROOT, "data")
 CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
+MEDIA_BLOB_MAX_BYTES = int(os.getenv("MEDIA_BLOB_MAX_BYTES", str(15 * 1024 * 1024)))
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
@@ -1723,7 +1724,7 @@ def _serve_media_root(root, rel_path):
         return None
     if os.path.isfile(path):
         return path
-    if storage_r2.is_configured() and _r2_hydrate_local(path):
+    if _remote_hydrate_local(path):
         return path
     return None
 
@@ -7027,6 +7028,7 @@ def output_url_for(filename, category="output"):
     folder, subdir = output_storage(category)
     rel = str(filename or "").replace("\\", "/").lstrip("/")
     local_path = os.path.join(folder, rel)
+    persist_media_file(local_path)
     if storage_r2.is_configured() and os.path.exists(local_path):
         key = _r2_key_for_path(local_path) or f"{subdir}/{rel}"
         if storage_r2.upload_file(key, local_path):
@@ -7088,6 +7090,59 @@ def _r2_hydrate_local(path):
         return False
     return storage_r2.download_to_file(key, path)
 
+def _media_key_for_path(path):
+    """媒体对象键：/assets 下用相对路径，其它输出目录用 output/<rel>，与 R2 键保持一致。"""
+    try:
+        abs_path = os.path.abspath(path)
+        assets_root = os.path.abspath(ASSETS_DIR)
+        rel = os.path.relpath(abs_path, assets_root).replace("\\", "/")
+        if not rel.startswith("../") and rel != "..":
+            return rel
+        output_root = os.path.abspath(OUTPUT_DIR)
+        out_rel = os.path.relpath(abs_path, output_root).replace("\\", "/")
+        if not out_rel.startswith("../") and out_rel != "..":
+            return f"output/{out_rel}"
+    except Exception:
+        pass
+    return None
+
+def _remote_hydrate_local(path):
+    """本地缺失时依次尝试 R2 与 Postgres 媒体库拉取（无状态实例懒加载）。"""
+    if not path or os.path.exists(path):
+        return os.path.exists(path)
+    if _r2_hydrate_local(path):
+        return True
+    if storage_db.is_configured():
+        key = _media_key_for_path(path)
+        if key:
+            data, _content_type = storage_db.media_load(key)
+            if data is not None:
+                try:
+                    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    return True
+                except Exception:
+                    return False
+    return False
+
+def persist_media_file(path):
+    """把本地媒体文件持久化到 Postgres 媒体库（R2 由 output_url_for 负责上传）。
+    超过 MEDIA_BLOB_MAX_BYTES 的大文件（如视频）跳过，避免拖慢数据库。"""
+    try:
+        if not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) > MEDIA_BLOB_MAX_BYTES:
+            return False
+        key = _media_key_for_path(path)
+        if not key or not storage_db.is_configured():
+            return False
+        with open(path, "rb") as f:
+            data = f.read()
+        return storage_db.media_save(key, data, content_type_for_path(path))
+    except Exception:
+        return False
+
 def _r2_local_path_from_public_url(url):
     """把 R2 公共 CDN 地址映射回本地缓存路径（键与 /assets 下相对路径一一对应）。"""
     base = storage_r2.public_base_url()
@@ -7118,7 +7173,7 @@ def storage_file_path(kind, rel):
             raise HTTPException(status_code=400, detail="非法文件路径")
     except ValueError:
         raise HTTPException(status_code=400, detail="非法文件路径")
-    return path if _r2_hydrate_local(path) else None
+    return path if _remote_hydrate_local(path) else None
 
 def output_file_from_url(url):
     if isinstance(url, dict):
@@ -7127,7 +7182,7 @@ def output_file_from_url(url):
         return None
     r2_local = _r2_local_path_from_public_url(url)
     if r2_local:
-        return r2_local if _r2_hydrate_local(r2_local) else None
+        return r2_local if _remote_hydrate_local(r2_local) else None
     clean = urllib.parse.unquote(url.split("?", 1)[0]).replace("\\", "/")
     if clean.startswith("/api/storage-files/"):
         rest = clean[len("/api/storage-files/"):].lstrip("/")
@@ -7147,7 +7202,7 @@ def output_file_from_url(url):
     for root in roots:
         path = os.path.abspath(os.path.join(root, rel))
         output_root = os.path.abspath(root)
-        if os.path.commonpath([output_root, path]) == output_root and _r2_hydrate_local(path):
+        if os.path.commonpath([output_root, path]) == output_root and _remote_hydrate_local(path):
             return path
     return None
 
@@ -7211,6 +7266,10 @@ def canvas_asset_exists(url):
                 status = storage_r2.object_exists_status(key)
                 if status is not None:
                     return status
+        if storage_db.is_configured():
+            key = _media_key_for_path(local)
+            if key and storage_db.media_exists(key):
+                return True
         return False
     return True
 
@@ -7641,10 +7700,17 @@ async def media_preview(url: str, w: int = 512):
     source_path = None
     if local and os.path.isfile(local):
         source_path = local
-    elif storage_r2.is_configured():
-        r2_key = (_r2_key_for_path(local) if local else storage_r2.key_from_public_url(url)) or None
-        if r2_key:
-            r2_bytes = await asyncio.to_thread(storage_r2.download_bytes, r2_key)
+    else:
+        if storage_r2.is_configured():
+            r2_key = (_r2_key_for_path(local) if local else storage_r2.key_from_public_url(url)) or None
+            if r2_key:
+                r2_bytes = await asyncio.to_thread(storage_r2.download_bytes, r2_key)
+        if not r2_bytes and storage_db.is_configured():
+            db_key = _media_key_for_path(local) if local else (storage_r2.key_from_public_url(url) if storage_r2.is_configured() else None)
+            if db_key:
+                db_data, _db_ct = await asyncio.to_thread(storage_db.media_load, db_key)
+                if db_data is not None:
+                    r2_bytes = db_data
     if not source_path and not r2_bytes:
         raise HTTPException(status_code=404, detail="媒体文件不存在")
 
@@ -12853,6 +12919,7 @@ async def upload_local_assets(files: List[UploadFile] = File(...), folder: str =
         path = os.path.join(folder_abs, filename)
         with open(path, "wb") as f:
             f.write(content)
+        persist_media_file(path)
         if kind == "image":
             classification = await classify_asset_image_best_effort(path)
             if classification:

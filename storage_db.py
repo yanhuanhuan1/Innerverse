@@ -190,6 +190,17 @@ def _ensure_schema(conn) -> bool:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS media_blobs (
+                key TEXT PRIMARY KEY,
+                data BYTEA NOT NULL,
+                content_type TEXT NOT NULL DEFAULT '',
+                size BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -343,6 +354,70 @@ def kv_list_meta(collection: str, fields: tuple) -> Optional[List[Dict[str, Any]
         except Exception as exc:
             logger.info(f"[storage_db] kv_list_meta failed ({collection}): {exc}")
             return None
+
+
+def media_save(key: str, data: bytes, content_type: str = "") -> bool:
+    """把媒体文件本体持久化到 Postgres（bytea），作为 R2 之外的无状态实例兜底存储。"""
+    if not is_configured() or not key or not data:
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            conn.execute(
+                """
+                INSERT INTO media_blobs (key, data, content_type, size, created_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (key) DO UPDATE SET
+                    data = EXCLUDED.data,
+                    content_type = EXCLUDED.content_type,
+                    size = EXCLUDED.size,
+                    created_at = now()
+                """,
+                (key, psycopg.Binary(data), str(content_type or "")[:200], len(data)),
+            )
+            return True
+        except Exception as exc:
+            logger.info(f"[storage_db] media_save failed ({key}): {type(exc).__name__}")
+            return False
+
+
+def media_load(key: str):
+    """读取媒体本体，返回 (bytes, content_type)，不存在或失败时返回 (None, '')。"""
+    if not is_configured() or not key:
+        return None, ""
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None, ""
+        try:
+            cur = conn.execute(
+                "SELECT data, content_type FROM media_blobs WHERE key = %s",
+                (key,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, ""
+            return row[0], (row[1] or "")
+        except Exception as exc:
+            logger.info(f"[storage_db] media_load failed ({key}): {type(exc).__name__}")
+            return None, ""
+
+
+def media_exists(key: str) -> bool:
+    if not is_configured() or not key:
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            cur = conn.execute("SELECT 1 FROM media_blobs WHERE key = %s", (key,))
+            return cur.fetchone() is not None
+        except Exception as exc:
+            logger.info(f"[storage_db] media_exists failed ({key}): {type(exc).__name__}")
+            return False
 
 
 def _json_payload(data: Dict[str, Any]) -> str:

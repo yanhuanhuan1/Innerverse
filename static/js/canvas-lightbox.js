@@ -106,12 +106,24 @@ function openOutputLightbox(url, out){
                 ? `${outputLightboxVideo.videoWidth} x ${outputLightboxVideo.videoHeight}`
                 : 'Video', meta);
         };
+        let videoAttempts = 0;
+        const loadVideo = () => {
+            const src = videoAttempts > 0
+                ? `/api/download-output?inline=1&url=${encodeURIComponent(url)}&name=${encodeURIComponent(outputDownloadName(url))}`
+                : canvasDisplayMediaUrl(url, outputDownloadName(url));
+            outputLightboxVideo.src = src;
+        };
         outputLightboxVideo.onerror = () => {
+            if(videoAttempts === 0){
+                videoAttempts += 1;
+                loadVideo();
+                return;
+            }
             outputResolutionText(langIsEn()
                 ? 'Video failed to load. The file may be missing or expired.'
                 : '视频加载失败，文件可能已丢失或已过期。', meta);
         };
-        outputLightboxVideo.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
+        loadVideo();
         outputPreview.ondblclick = null;
         outputDownloadBtn.onclick = e => {
             e.stopPropagation();
@@ -135,14 +147,27 @@ function openOutputLightbox(url, out){
         if(!w || !h) return;
         outputResolutionText(`${w} x ${h}${outputSizeText ? ` · ${outputSizeText}` : ''}`, meta);
     };
+    const directSrc = canvasDisplayMediaUrl(url, outputDownloadName(url));
+    const proxySrc = `/api/download-output?inline=1&url=${encodeURIComponent(url)}&name=${encodeURIComponent(outputDownloadName(url))}`;
+    let loadAttempts = 0;
+    const applyImageSource = () => {
+        const src = loadAttempts > 0 ? proxySrc : directSrc;
+        outputLightboxImg.src = src;
+        outputCompareResult.src = src;
+    };
     outputLightboxImg.onload = () => applyOutputResolution();
     outputLightboxImg.onerror = () => {
+        if(loadAttempts === 0 && proxySrc !== directSrc){
+            loadAttempts += 1;
+            applyImageSource();
+            return;
+        }
         outputResolutionText(langIsEn()
             ? 'Image failed to load. The file may be missing or expired.'
             : '图片加载失败，文件可能已丢失或已过期。', meta);
     };
     outputLightboxImg.alt = langIsEn() ? 'output preview' : '输出预览';
-    fetch(canvasDisplayMediaUrl(url, outputDownloadName(url)), {method:'HEAD'})
+    fetch(directSrc, {method:'HEAD'})
         .then(res => {
             const bytes = Number(res.headers.get('content-length'));
             if(res.ok && bytes > 0){
@@ -151,8 +176,7 @@ function openOutputLightbox(url, out){
             }
         })
         .catch(() => {});
-    outputLightboxImg.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
-    outputCompareResult.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
+    applyImageSource();
     outputCompareOriginal.src = currentOutputCompareUrl ? canvasDisplayMediaUrl(currentOutputCompareUrl, outputDownloadName(currentOutputCompareUrl)) : '';
     outputPreview.ondblclick = e => {
         e.stopPropagation();
