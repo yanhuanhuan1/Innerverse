@@ -1524,7 +1524,27 @@ function centerViewportOnWorldPoint(point){
 }
 function safeViewportScale(value){
     const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? n : 1;
+    return Number.isFinite(n) && n > 0 ? Math.min(n, maxCanvasZoomScale()) : 1;
+}
+function maxCanvasZoomScale(){
+    // 滚轮放大上限：最大节点铺满视口即停止（避免无限放大）。
+    try {
+        const rect = board.getBoundingClientRect();
+        const viewW = Math.max(1, rect.width || 1);
+        const viewH = Math.max(1, rect.height || 1);
+        let biggest = null;
+        nodes.forEach(node => {
+            const el = nodesEl.querySelector(`.node[data-id="${CSS.escape(node.id)}"]`);
+            const w = Number(el?.offsetWidth || node.w || 260);
+            const h = Number(el?.offsetHeight || node.h || 200);
+            const area = w * h;
+            if(!biggest || area > biggest.area) biggest = {area, w, h};
+        });
+        if(!biggest) return 8;
+        return Math.max(1, Math.min(8, viewW / biggest.w, viewH / biggest.h));
+    } catch(e) {
+        return 8;
+    }
 }
 function fitAllNodesViewport(){
     const rect = board.getBoundingClientRect();
