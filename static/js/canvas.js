@@ -1428,6 +1428,7 @@ function resetCanvasPageScroll(){
 function applyViewport(){
     resetCanvasPageScroll();
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+    repositionSelectionHub();
     scheduleMinimapRender();
 }
 function estimatedNodeRect(n){
@@ -6513,8 +6514,15 @@ function renderNode(node){
         e.stopPropagation();
         if(isNodeControl(e.target)) return;
         collapseOpenComposerPanels(node.id);
+        const alreadySelected = selected.has(node.id);
+        if(!e.ctrlKey && !e.metaKey && alreadySelected && hubTargetId === node.id && selectionHub?.classList.contains('open')){
+            // 再次点击当前节点：顶部操作栏平滑收起
+            closeSelectionHub();
+            refreshSelectionVisuals();
+            return;
+        }
         if(e.ctrlKey || e.metaKey) selected.has(node.id) ? selected.delete(node.id) : selected.add(node.id);
-        else if(!selected.has(node.id)) { selected.clear(); selected.add(node.id); }
+        else if(!alreadySelected) { selected.clear(); selected.add(node.id); }
         refreshSelectionVisuals();
     };
     el.oncontextmenu = e => {
@@ -13475,6 +13483,7 @@ function deleteNode(id, event){
     selected.delete(id);
     removeNodeElements([id]);
     updateCanvasEmptyHint();
+    renderSelectionHub();
     scheduleSave();
 }
 function clearNodeContentBeforeDelete(id){
@@ -15100,9 +15109,92 @@ function finishSelection(){
     refreshSelectionVisuals();
     if(workflowTransferModal?.classList.contains('open')) updateWorkflowTransferMeta();
 }
-function renderSelectionHub(){
-    selectionHub.innerHTML = '';
+let hubTargetId = '';
+let hubTimer = 0;
+function selectionHubHtml(){
+    return `
+        <button type="button" class="hub-btn danger" data-hub-action="delete" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2" class="w-4 h-4"></i><span>${escapeHtml(tr('common.delete'))}</span></button>
+        <button type="button" class="hub-btn" data-hub-action="arrange" title="${escapeHtml(tr('canvas.arrangeSelected'))}"><i data-lucide="layout-grid" class="w-4 h-4"></i><span>${escapeHtml(tr('canvas.arrangeSelected'))}</span></button>
+    `;
+}
+function positionSelectionHub(node){
+    if(!node || !selectionHub || !board || !nodesEl) return;
+    const nodeEl = nodesEl.querySelector(`.node[data-id="${CSS.escape(node.id)}"]`);
+    if(!nodeEl) return;
+    const boardRect = board.getBoundingClientRect();
+    const r = nodeEl.getBoundingClientRect();
+    const left = (r.left - boardRect.left) + r.width / 2;
+    const top = (r.top - boardRect.top) - 10;
+    selectionHub.style.left = `${Math.round(left)}px`;
+    selectionHub.style.top = `${Math.round(top)}px`;
+}
+function repositionSelectionHub(){
+    if(!selectionHub?.classList.contains('open') || !hubTargetId) return;
+    const node = nodes.find(n => n.id === hubTargetId);
+    if(node) positionSelectionHub(node);
+}
+function showSelectionHub(node){
+    if(!node || !selectionHub) return;
+    if(hubTargetId === node.id && selectionHub.classList.contains('open')){
+        positionSelectionHub(node);
+        return;
+    }
+    if(hubTargetId === node.id && selectionHub.classList.contains('closing')){
+        return;
+    }
+    if(selectionHub.classList.contains('open') || selectionHub.classList.contains('closing')){
+        clearTimeout(hubTimer);
+        selectionHub.classList.remove('open');
+        selectionHub.classList.add('closing');
+        hubTargetId = node.id;
+        hubTimer = setTimeout(() => {
+            // 快速连点时目标可能已切换：只弹出仍是当前目标的节点
+            if(hubTargetId !== node.id) return;
+            selectionHub.classList.remove('closing');
+            selectionHub.innerHTML = selectionHubHtml();
+            positionSelectionHub(node);
+            void selectionHub.offsetWidth;
+            selectionHub.classList.add('open');
+            refreshIcons();
+        }, 180);
+        return;
+    }
+    hubTargetId = node.id;
+    selectionHub.innerHTML = selectionHubHtml();
+    positionSelectionHub(node);
+    void selectionHub.offsetWidth;
+    selectionHub.classList.add('open');
+    refreshIcons();
+}
+function closeSelectionHub(){
+    if(!selectionHub) return;
+    if(!selectionHub.classList.contains('open') && !selectionHub.classList.contains('closing')) return;
+    clearTimeout(hubTimer);
     selectionHub.classList.remove('open');
+    selectionHub.classList.add('closing');
+    hubTimer = setTimeout(() => {
+        selectionHub.classList.remove('closing');
+        selectionHub.innerHTML = '';
+        hubTargetId = '';
+    }, 180);
+}
+function renderSelectionHub(){
+    const targets = [...selected].map(id => nodes.find(n => n.id === id)).filter(Boolean);
+    if(targets.length !== 1){ closeSelectionHub(); return; }
+    showSelectionHub(targets[0]);
+}
+function bindSelectionHubEvents(){
+    if(!selectionHub || selectionHub._hubBound) return;
+    selectionHub._hubBound = true;
+    selectionHub.addEventListener('mousedown', e => e.stopPropagation());
+    selectionHub.addEventListener('pointerdown', e => e.stopPropagation());
+    selectionHub.addEventListener('click', e => {
+        e.stopPropagation();
+        const btn = e.target.closest('[data-hub-action]');
+        if(!btn) return;
+        if(btn.dataset.hubAction === 'delete') deleteSelectedNodes();
+        else if(btn.dataset.hubAction === 'arrange') arrangeSelectedCanvasNodes();
+    });
 }
 function startSelectionLink(e, kind){
     e.preventDefault();
@@ -16177,6 +16269,7 @@ canvasArrangeBtn?.addEventListener('click', e => {
     e.stopPropagation();
     arrangeSelectedCanvasNodes();
 });
+bindSelectionHubEvents();
 function isZoomPreviewIgnoredTarget(target){
     return !!target?.closest?.('#createMenu, #linkCreateMenu, #nodeInputMenu, #nodeOutputMenu, #imageNodeMenu, .minimap, #canvasAssetPanel, #assetManagerModal, #workflowTransferModal, #logModal, #promptTemplateModal, #imageEditModal, #outputLightbox');
 }
@@ -16405,6 +16498,7 @@ function deleteSelectedNodes(){
     selected.clear();
     removeNodeElements([...toDelete]);
     updateCanvasEmptyHint();
+    renderSelectionHub();
     scheduleSave();
 }
 function hasImageFiles(items){
