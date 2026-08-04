@@ -238,6 +238,11 @@ let html = fs.readFileSync(htmlPath, 'utf8');
 html = html.replace(/<script defer src="\/static\/(?:vendor\/js\/lucide\.js|js\/build\/lucide-slim-[^"']+)(\?v=[^"']*)?"?><\/script>/, '');
 html = html.replace(/<script defer src="\/static\/js\/build\/canvas-core-[^"']+(\?v=[^"']*)?"?><\/script>/, '');
 html = html.replace(/<script defer src="\/static\/js\/canvas\.js(\?v=[^"']*)?"?><\/script>/, '');
+html = html.replace(/<script defer src="\/static\/js\/build\/lucide-slim-[^"']+(\?v=[^"']*)?"?><\/script>/g, '');
+html = html.replace(/<script src="\/static\/js\/build\/manifest\.js(\?v=[^"']*)?"?><\/script>/g, '');
+html = html.replace(/<script defer src="\/static\/js\/build\/canvas-core-[^"']+(\?v=[^"']*)?"?><\/script>/g, '');
+html = html.replace(/<script defer src="\/static\/js\/canvas\.js(\?v=[^"']*)?"?><\/script>/g, '');
+html = html.replace(/<script>window\.CANVAS_BUILD\s*=\s*\{.*?\};<\/script>/g, '');
 const lucideTag = `    <script defer src="/static/js/build/${lucideFile}"></script>`;
 const inlineBuild = `    <script>window.CANVAS_BUILD = ${JSON.stringify({buildId: manifest.buildId, chunks: manifest.chunks})};</script>`;
 const coreTag = `    <script defer src="/static/js/build/${core.fileName}"></script>`;
@@ -245,8 +250,7 @@ const coreTag = `    <script defer src="/static/js/build/${core.fileName}"></scr
 html = html.replace(/<script>window\.CANVAS_BUILD\s*=\s*\{.*?\};<\/script>/, '');
 // 插到 </head> 前（保持 CSS 之后）
 html = html.replace(/<script src="\/static\/js\/build\/manifest\.js(\?v=[^"']*)?"?><\/script>/, inlineBuild);
-const headInsert = `${lucideTag}\n${coreTag}\n</head>`;
-html = html.replace('</head>', html.includes(inlineBuild) ? headInsert : `${lucideTag}\n${inlineBuild}\n${coreTag}\n</head>`);
+html = html.replace('</head>', `${lucideTag}\n${inlineBuild}\n${coreTag}\n</head>`);
 html = html.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 fs.writeFileSync(htmlPath, html);
 
