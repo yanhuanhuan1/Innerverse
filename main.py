@@ -31,7 +31,6 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, RLock, Thread
 import httpx
-from PIL import Image, ImageOps
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -42,6 +41,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import storage_r2
 import storage_db
+
+def pil_modules():
+    """???? PIL?????????/??????????????"""
+    global _pil_modules
+    if _pil_modules is None:
+        from PIL import Image, ImageOps  # noqa: E402
+        _pil_modules = (Image, ImageOps)
+    return _pil_modules
+
+_pil_modules = None
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("innerverse")
@@ -5238,6 +5248,7 @@ def gpt_image_2_skill_failure_message(stdout_text="", stderr_text="", returncode
     return combined[:1600]
 
 def codex_postprocess_image_to_requested_size(path="", requested_size="", provider=""):
+    Image, ImageOps = pil_modules()
     provider_text = str(provider or "").strip().lower()
     if provider_text not in {"codex", "gemini-cli"}:
         return ""
@@ -7297,7 +7308,7 @@ def delete_media_preview_cache(path: str) -> int:
                 pass
     return removed
 
-def image_has_alpha(img: Image.Image) -> bool:
+def image_has_alpha(img) -> bool:
     if img.mode in ("RGBA", "LA"):
         return True
     if img.mode == "P":
@@ -7307,6 +7318,7 @@ def image_has_alpha(img: Image.Image) -> bool:
 STORAGE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
 
 def storage_file_item(kind, root, path):
+    Image, ImageOps = pil_modules()
     rel = os.path.relpath(path, root).replace("\\", "/")
     try:
         stat = os.stat(path)
@@ -7434,7 +7446,8 @@ def media_preview_cache_paths_for_seed(seed: str, width: int, mtime_ns: int = 0,
 def is_video_preview_file(path: str) -> bool:
     return os.path.splitext(str(path or "").split("?", 1)[0])[1].lower() in {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
 
-def generate_video_preview_image(path: str, width: int) -> Image.Image:
+def generate_video_preview_image(path: str, width: int) -> Any:
+    Image, ImageOps = pil_modules()
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 ffmpeg，无法生成视频预览图")
@@ -7496,6 +7509,7 @@ async def media_preview(url: str, w: int = 512):
         return FileResponse(png_path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
     def _build_preview():
+        Image, ImageOps = pil_modules()
         # 同步 PIL 处理 + 落盘，放到线程里执行，避免阻塞事件循环（几十张首次生成会卡死整个 loop → 缩略图全空白）
         os.makedirs(MEDIA_PREVIEW_DIR, exist_ok=True)
         if is_video:
@@ -7547,6 +7561,7 @@ async def image_jpeg(url: str, w: int = 0):
         return FileResponse(cache_path, media_type="image/jpeg")
 
     def _build():
+        Image, ImageOps = pil_modules()
         os.makedirs(MEDIA_PREVIEW_DIR, exist_ok=True)
         with Image.open(path) as src:
             img = ImageOps.exif_transpose(src)
@@ -7651,6 +7666,7 @@ def normalize_local_image_path(value):
     raise HTTPException(status_code=400, detail="只支持本机绝对图片路径")
 
 def import_local_image_file(path):
+    Image, ImageOps = pil_modules()
     ext = os.path.splitext(path)[1].lower()
     if ext not in LOCAL_IMAGE_IMPORT_EXTS:
         raise HTTPException(status_code=400, detail="仅支持 PNG、JPG、JPEG、WEBP、GIF 图片")
@@ -8248,6 +8264,7 @@ def shared_child_abs(folder_abs, rel):
     return abs_path
 
 def image_path_to_data_url(path, max_size=1024):
+    Image, ImageOps = pil_modules()
     if max_size:
         try:
             with Image.open(path) as img:
@@ -8570,6 +8587,7 @@ def is_video_reference_value(value):
     return bool(re.search(r"\.(mp4|webm|mov|m4v|avi|mkv)$", clean))
 
 def convert_output_to_jpg(url, quality=88):
+    Image, ImageOps = pil_modules()
     path = output_file_from_url(url)
     if not path:
         return url
@@ -8603,6 +8621,7 @@ def convert_output_to_jpg(url, quality=88):
         return url
 
 def reference_to_data_url(ref, max_size=None):
+    Image, ImageOps = pil_modules()
     """把本地输出文件转为 data URL（base64）。max_size 限制最长边像素，避免 payload 过大。"""
     path = output_file_from_url(ref.get("url", ""))
     if not path:
@@ -8781,6 +8800,7 @@ def read_xlsx_attachment(path, limit=MAX_ATTACHMENT_TEXT_CHARS):
     return "\n".join(parts).strip()[:limit]
 
 def xlsx_embedded_image_data_urls(path, max_images=4, max_size=1536):
+    Image, ImageOps = pil_modules()
     urls = []
     try:
         with zipfile.ZipFile(path) as archive:
@@ -9039,6 +9059,7 @@ async def video_reference_to_frame_data_urls(value, max_frames=6, max_size=768):
             except OSError: pass
 
 def compress_data_url_image(value, max_size=1536, jpeg_quality=88):
+    Image, ImageOps = pil_modules()
     if not isinstance(value, str) or not value.startswith("data:image/") or ";base64," not in value:
         return value
     header, encoded = value.split(";base64,", 1)
@@ -9258,6 +9279,7 @@ def apimart_veo31_resolution(resolution: str) -> str:
     return value if value in {"720p", "1080p", "4k"} else "720p"
 
 def apimart_upload_file_payload(path: str):
+    Image, ImageOps = pil_modules()
     """Return (filename, bytes, content_type), keeping APIMart VEO images under the documented 10MB limit."""
     max_bytes = 9_500_000
     size = os.path.getsize(path)
@@ -9311,6 +9333,7 @@ def extract_apimart_asset_url(payload):
     return ""
 
 def apimart_upload_payload_from_bytes(data: bytes, mime: str, name_hint: str = "image"):
+    Image, ImageOps = pil_modules()
     """把内存中的图片字节按 APIMart 的 10MB 限制压缩为可上传 payload。"""
     max_bytes = 9_500_000
     ext = mimetypes.guess_extension(mime or "image/png") or ".png"
@@ -9883,6 +9906,7 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
         return value
 
 def image_output_meta(url, source_item=None):
+    Image, ImageOps = pil_modules()
     meta = {"url": url, "kind": "image"}
     if not url:
         return meta
@@ -11946,6 +11970,7 @@ def latest_chat_image_refs(conversation, limit=1):
     return refs
 
 def image_size_from_reference(ref):
+    Image, ImageOps = pil_modules()
     path = output_file_from_url(ref)
     if not path:
         return ""
@@ -12260,6 +12285,7 @@ async def upload_image(files: List[UploadFile] = File(...)):
 
 @app.post("/api/ai/upload")
 async def upload_ai_reference(files: List[UploadFile] = File(...)):
+    Image, ImageOps = pil_modules()
     uploaded = []
     image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     video_exts = {".mp4", ".webm", ".mov", ".m4v", ".flv"}
@@ -12466,6 +12492,7 @@ def _read_local_upload_caption(filename):
     return text, os.path.basename(caption_path)
 
 def _local_upload_item(filename):
+    Image, ImageOps = pil_modules()
     path = os.path.join(LOCAL_UPLOAD_DIR, filename)
     rel = _local_upload_rel_path(filename)
     try:
@@ -13651,14 +13678,41 @@ async def api_health():
     }
 
 
+_WARMUP_LOCK = Lock()
+_WARMUP_LAST = 0.0
+_WARMUP_MIN_INTERVAL = 10.0
+
+
+@app.get("/api/warmup")
+async def api_warmup():
+    """生产预热：只做函数初始化 + Neon 连接建立 + SELECT 1。
+    不读取画布、不请求 R2、不写库；服务端限频，客户端 sessionStorage 限频。"""
+    global _WARMUP_LAST
+    with _WARMUP_LOCK:
+        now = time.time()
+        if now - _WARMUP_LAST < _WARMUP_MIN_INTERVAL:
+            return {"ok": True, "db": True, "throttled": True}
+        _WARMUP_LAST = now
+    st = ServerTiming()
+    db_ok = False
+    if storage_db.is_configured():
+        gen_before = storage_db.connection_generation()
+        db_ok = await asyncio.to_thread(storage_db.warmup_connect)
+        if storage_db.connection_generation() > gen_before:
+            st.mark("db_connect", dur=storage_db.last_connect_duration_ms())
+    st.mark("warmup")
+    return JSONResponse({"ok": True, "db": db_ok}, headers={"Server-Timing": st.header()})
+
+
 @app.post("/api/perf")
 async def perf_marks(payload: Dict[str, Any]):
     """接收前端性能标记（非敏感、不鉴权、仅记录，用于定位首屏耗时）。"""
     try:
         marks = payload.get("marks") if isinstance(payload.get("marks"), list) else []
         route = str(payload.get("route") or "canvas")[:60]
+        phase = str(payload.get("phase") or "")[:40]
         summary = {str(item.get("name") or ""): round(float(item.get("t") or 0)) for item in marks if isinstance(item, dict)}
-        logger.info(f"[perf] route={route} marks={json.dumps(summary, ensure_ascii=False)[:500]}")
+        logger.info(f"[perf] route={route} phase={phase} marks={json.dumps(summary, ensure_ascii=False)[:500]}")
     except Exception as exc:
         logger.info(f"[perf] ignore malformed payload: {exc}")
     return {"ok": True}
@@ -16742,9 +16796,12 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate, request:
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str, request: Request, include_logs: int = 0):
     st = ServerTiming()
+    db_gen_before = storage_db.connection_generation()
     user = require_current_user(request)
     st.mark("auth")
     canvas = await asyncio.to_thread(load_canvas, canvas_id, user["id"])
+    if storage_db.connection_generation() > db_gen_before:
+        st.mark("db_connect", dur=storage_db.last_connect_duration_ms())
     st.mark("query")
     etag = f'"{canvas.get("updated_at") or 0}-{canvas.get("id") or ""}"'
     if_none_match = request.headers.get("if-none-match", "")
@@ -16773,6 +16830,12 @@ async def get_canvas_logs(canvas_id: str, request: Request, limit: int = 100, of
 @app.post("/api/canvases/{canvas_id}/touch")
 async def touch_canvas(canvas_id: str, request: Request):
     user = require_current_user(request)
+    if storage_db.is_configured():
+        updated_at = storage_db.kv_touch("canvases", canvas_id_clean(canvas_id), user["id"])
+        if updated_at is None:
+            raise HTTPException(status_code=404, detail="画布不存在")
+        return {"canvas": {"id": canvas_id_clean(canvas_id), "updated_at": updated_at}, "updated_at": updated_at}
+
     def touch():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id, user["id"])
@@ -17781,6 +17844,7 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
 
 @app.post("/api/asset-library/items/crop")
 async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
+    Image, ImageOps = pil_modules()
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")

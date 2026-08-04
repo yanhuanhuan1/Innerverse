@@ -18,6 +18,7 @@ callers should always check that first and use the local-file path instead.
 import os
 import json
 import threading
+import time
 import uuid
 import datetime
 import hmac
@@ -31,6 +32,17 @@ _lock = threading.Lock()
 _conn = None
 _init_error = None
 _schema_ready = False
+_connection_generation = 0
+_last_connect_duration_ms = 0.0
+
+
+def connection_generation() -> int:
+    """当前连接代数（每次新建连接 +1），供接口判断本次请求是否发生了冷连接。"""
+    return _connection_generation
+
+
+def last_connect_duration_ms() -> float:
+    return _last_connect_duration_ms
 
 
 def is_configured() -> bool:
@@ -57,8 +69,25 @@ def ping() -> bool:
             return False
 
 
+def warmup_connect() -> bool:
+    """预热：建立/复用连接并执行最小 SELECT 1。不读业务数据、不写库。"""
+    if not is_configured():
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn:
+            return False
+        try:
+            conn.execute("SELECT 1")
+            return True
+        except Exception as exc:
+            logger.info(f"[storage_db] warmup ping failed: {type(exc).__name__}")
+            return False
+
+
 def _connect():
     global _conn, _init_error
+    global _connection_generation, _last_connect_duration_ms
     if _conn is not None:
         try:
             # cheap liveness check
@@ -74,11 +103,36 @@ def _connect():
         return None
     try:
         import psycopg
-        _conn = psycopg.connect(_DATABASE_URL, autocommit=True, connect_timeout=10)
+        started = time.monotonic()
+        try:
+            _conn = psycopg.connect(
+                _DATABASE_URL,
+                autocommit=True,
+                connect_timeout=10,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=5,
+                options="-c statement_timeout=15000",
+            )
+        except Exception:
+            # 池化连接（pgBouncer 等）可能不接受 startup options：去掉 options 重试一次。
+            _conn = psycopg.connect(
+                _DATABASE_URL,
+                autocommit=True,
+                connect_timeout=10,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=5,
+            )
+        _last_connect_duration_ms = (time.monotonic() - started) * 1000.0
+        _connection_generation += 1
         return _conn
     except Exception as exc:
         _init_error = exc
-        logger.info(f"[storage_db] failed to connect to Postgres: {exc}")
+        # 只记录异常类型，避免连接串/主机/用户名等敏感信息进入日志
+        logger.info(f"[storage_db] failed to connect to Postgres: {type(exc).__name__}")
         return None
 
 
@@ -210,6 +264,37 @@ def kv_delete(collection: str, doc_id: str) -> bool:
         except Exception as exc:
             logger.info(f"[storage_db] kv_delete failed ({collection}/{doc_id}): {exc}")
             return False
+
+
+def kv_touch(collection: str, doc_id: str, user_id: str = "", updated_at: int = 0) -> Optional[int]:
+    """轻量 touch：只更新 updated_at 并返回新值，不读取/重写整份文档。
+
+    返回 None 表示文档不存在/无权访问（调用方按 404 处理）。
+    """
+    if not updated_at:
+        updated_at = int(time.time() * 1000)
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            sql = (
+                "UPDATE kv_documents SET data = data || jsonb_build_object('updated_at', %s), updated_at = now() "
+                "WHERE collection = %s AND doc_id = %s AND COALESCE((data->>'deleted_at')::bigint, 0) = 0"
+            )
+            params = [updated_at, collection, doc_id]
+            if user_id:
+                sql += " AND data->>'user_id' = %s"
+                params.append(user_id)
+            sql += " RETURNING data->>'updated_at'"
+            cur = conn.execute(sql, tuple(params))
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return None
+            return int(float(row[0]))
+        except Exception as exc:
+            logger.info(f"[storage_db] kv_touch failed ({collection}/{doc_id}): {type(exc).__name__}")
+            return None
 
 
 def kv_list(collection: str) -> List[Dict[str, Any]]:

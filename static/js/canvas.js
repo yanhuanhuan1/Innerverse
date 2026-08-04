@@ -1346,7 +1346,20 @@ function reportPerf(){
         if(window.__perfReported) return;
         window.__perfReported = true;
         const marks = window.__perfMarks || [];
-        const body = JSON.stringify({route: 'canvas', marks});
+        let phase = 'cold';
+        try {
+            const now = Date.now();
+            const id = (typeof canvas !== 'undefined' && canvas?.id) ? String(canvas.id) : '';
+            const homeWarm = Number(sessionStorage.getItem('canvas_home_warmup_at') || 0);
+            if(homeWarm && now - homeWarm < 5 * 60 * 1000) phase = 'homepage-warmed';
+            else if(id && sessionStorage.getItem('canvas_prefetched_' + id)) phase = 'prefetched';
+            else {
+                const lastReady = Number(sessionStorage.getItem('canvas_last_ready_at') || 0);
+                if(lastReady && now - lastReady < 5 * 60 * 1000) phase = 'warm';
+            }
+            sessionStorage.setItem('canvas_last_ready_at', String(now));
+        } catch(e) {}
+        const body = JSON.stringify({route: 'canvas', phase, marks});
         if(navigator.sendBeacon) navigator.sendBeacon('/api/perf', new Blob([body], {type:'application/json'}));
     } catch(e) {}
 }

@@ -568,6 +568,24 @@ const canvasPrefetch = {
     limit: 2
 };
 const CANVAS_PREFETCH_DELAY = 90;
+const CANVAS_ASSET_VERSION = '2026.08.04.perf2';
+const HOME_WARMUP_KEY = 'canvas_home_warmup_at';
+const HOME_WARMUP_INTERVAL = 5 * 60 * 1000;
+function scheduleHomeWarmup(){
+    try {
+        const last = Number(sessionStorage.getItem(HOME_WARMUP_KEY) || 0);
+        if(Date.now() - last < HOME_WARMUP_INTERVAL) return;
+        sessionStorage.setItem(HOME_WARMUP_KEY, String(Date.now()));
+    } catch(e) {}
+    // 页面加载完成后延迟触发一次生产预热（函数初始化 + Neon 连接 + SELECT 1），失败静默。
+    setTimeout(() => {
+        try {
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(), 5000);
+            fetch('/api/warmup', {credentials:'same-origin', cache:'no-store', signal: controller.signal}).catch(() => {});
+        } catch(e) {}
+    }, 700);
+}
 function canvasPrefetchAssets(id){
     if(!id || canvasPrefetch.assetsDone.has(id)) return;
     const canvas = latestCanvasInProject(id);
@@ -584,9 +602,9 @@ function canvasPrefetchAssets(id){
         } catch(e) {}
     };
     add(canvasUrl(canvas), 'document');
-    add('/static/css/canvas.css?v=2026.08.04.perf1', 'style');
+    add('/static/css/canvas.css?v=' + CANVAS_ASSET_VERSION, 'style');
     add('/static/css/canvas-tailwind.css?v=2026.08.04.perf1', 'style');
-    add('/static/js/canvas.js?v=2026.08.04.perf1', 'script');
+    add('/static/js/canvas.js?v=' + CANVAS_ASSET_VERSION, 'script');
     add('/static/js/lucide.js?v=2026.07.23.1784878252', 'script');
     add('/static/vendor/fonts/inter-2.ttf', 'font');
     add('/static/vendor/fonts/inter-4.ttf', 'font');
@@ -606,7 +624,13 @@ function canvasPrefetchStart(id){
     const controller = new AbortController();
     canvasPrefetch.controllers.set(id, controller);
     fetch(`/api/canvases/${encodeURIComponent(canvas.id)}`, {credentials:'same-origin', cache:'default', signal: controller.signal})
-        .then(res => { if(res.ok){ canvasPrefetch.done.add(id); try { res.json(); } catch(e){} } })
+        .then(res => {
+            if(res.ok){
+                canvasPrefetch.done.add(id);
+                try { sessionStorage.setItem('canvas_prefetched_' + canvas.id, '1'); } catch(e) {}
+                try { res.json(); } catch(e) {}
+            }
+        })
         .catch(() => {})
         .finally(() => {
             canvasPrefetch.inflight.delete(id);
@@ -1050,6 +1074,7 @@ loginCodeInput?.addEventListener('input', () => {
 });
 homeLogoutBtn?.addEventListener('click', logout);
 loadCurrentUser().then(loadHomeData);
+scheduleHomeWarmup();
 if(initialHomeParams().get('section') === 'projects') focusProjectsSection();
 syncHomeHeaderControls();
 refreshIcons();
