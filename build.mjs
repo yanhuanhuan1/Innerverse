@@ -233,7 +233,8 @@ fs.writeFileSync(path.join(BUILD_DIR, 'manifest.js'), manifestCode);
 
 // ---------- 4) 更新 canvas.html 引用 ----------
 const htmlPath = path.join(ROOT, 'static', 'canvas.html');
-let html = fs.readFileSync(htmlPath, 'utf8');
+// 统一为 LF，避免 Windows CRLF 导致清理正则（[ \t]+\n）行为与 CI/Linux 不一致
+let html = fs.readFileSync(htmlPath, 'utf8').replace(/\r\n/g, '\n');
 // 移除旧的 build 引用（容忍 ?v= 后缀），再插入当前产物
 html = html.replace(/<script defer src="\/static\/(?:vendor\/js\/lucide\.js|js\/build\/lucide-slim-[^"']+)(\?v=[^"']*)?"?><\/script>/, '');
 html = html.replace(/<script defer src="\/static\/js\/build\/canvas-core-[^"']+(\?v=[^"']*)?"?><\/script>/, '');
