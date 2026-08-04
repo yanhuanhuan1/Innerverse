@@ -2995,3 +2995,6 @@ body.studio-theme-dark .shell .node.sized.video-node {
 .canvas-gen-run.running .canvas-gen-arrow svg {
     animation:spin 1s linear infinite;
 }
+
+/* 画布无节点时的背景提示 */
+.canvas-empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:5; pointer-events:none; color:rgba(148,163,184,.8); font-size:18px; font-weight:750; letter-spacing:.12em; user-select:none; text-shadow:0 2px 12px rgba(15,23,42,.12); }

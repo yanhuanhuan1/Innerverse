@@ -275,6 +275,7 @@ let minimapViewport = document.getElementById('minimapViewport');
 const linksEl = document.getElementById('links');
 const linkControlsEl = document.getElementById('linkControls');
 const dropOverlay = document.getElementById('dropOverlay');
+const canvasEmptyHint = document.getElementById('canvasEmptyHint');
 const createMenu = document.getElementById('createMenu');
 const linkCreateMenu = document.getElementById('linkCreateMenu');
 const nodeInputMenu = document.getElementById('nodeInputMenu');
@@ -6297,6 +6298,11 @@ function removeNodeElements(ids=[]){
     refreshCanvasAfterNodeDomChange(nodesEl);
 }
 
+function updateCanvasEmptyHint(){
+    // 画布没有任何节点时，在背景正中间显示“双击画布自由生成”提示。
+    if(!canvasEmptyHint) return;
+    canvasEmptyHint.hidden = !(canvas && nodes.length === 0);
+}
 function render(){
     const migratedOutputs = migrateInlineGeneratedOutputNodes();
     const outputScrolls = captureOutputScrolls();
@@ -6336,6 +6342,7 @@ function render(){
     refreshOutputTimer();
     syncCreativeToolbarState();
     if(migratedOutputs && canvas && !applyingRemoteCanvas) setTimeout(scheduleSave, 0);
+    updateCanvasEmptyHint();
 }
 function refreshNodes(ids=[]){
     const uniqueIds = [...new Set((ids || []).filter(Boolean))];
@@ -6370,6 +6377,7 @@ function refreshNodes(ids=[]){
     renderSelectionHub();
     syncCreativeToolbarState();
     scheduleMinimapRender();
+    updateCanvasEmptyHint();
 }
 function refreshRunNodes(node, out=null){
     refreshNodes([node?.id, out?.id]);
