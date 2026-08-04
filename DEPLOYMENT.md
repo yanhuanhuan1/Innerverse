@@ -174,3 +174,63 @@ the site. Two things help:
 
 Note: keep `vercel.json` free of `crons` on Hobby — an unsupported cron
 expression makes Vercel reject every deployment before the build starts.
+
+## Region / Pooled-Connection / Autopause Checklist (console, no secrets)
+
+These settings cannot be fully verified from code; confirm them once in the
+Neon / Vercel / Cloudflare dashboards:
+
+1. **Neon**
+   - Use a **Pooled connection** (pgBouncer, host contains `-pooler`) for
+     `DATABASE_URL` on Vercel. Code keeps a module-level reusable connection
+     per function instance and rebuilds it automatically when it drops, so no
+     per-request reconnect should happen.
+   - Prefer a Neon compute region near your Vercel function region (e.g. both
+     in `hkg1` / `singapore` / `iad1` — pick one pair and use it for both).
+   - Check the autopause setting: if you see multi-second cold starts after
+     idle, either disable autopause (paid plan), or keep the compute awake
+     with an uptime monitor hitting `/api/health` every few minutes.
+2. **Vercel**
+   - Function region: set the project's Function Region to the same region as
+     Neon (Vercel dashboard → Project → Settings → Functions).
+   - Do NOT add a custom `buildCommand` that skips Python dependency
+     installation. Rely on the committed build artifacts in `static/js/build`
+     and the CI build-consistency job instead.
+   - Environment variables to configure (names only, never commit values):
+     `DATABASE_URL` (Neon pooled), `AUTH_SESSION_SECRET`, `PUBLIC_BASE_URL`,
+     optional `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
+     `R2_BUCKET_NAME` / `R2_PUBLIC_BASE_URL`, `APIMART_API_KEY`,
+     `RESEND_API_KEY`, `EMAIL_FROM`.
+3. **Cloudflare R2** (if used)
+   - Bucket region should be close to Vercel/Neon; a public bucket domain
+     (or a public URL) is required for CDN-direct media URLs.
+   - `R2_PUBLIC_BASE_URL` must match the actual public bucket URL; otherwise
+     media falls back to API-served paths (still works, but goes through the
+     function).
+
+## Build / CI / Deploy Flow
+
+- `npm run build` regenerates `static/js/build/` with content-hashed filenames,
+  a unified `buildId`, and writes the core/lucide references **and** an inline
+  `window.CANVAS_BUILD` mapping directly into `static/canvas.html`, so a normal
+  canvas open does not request the runtime `manifest.js` (the manifest file is
+  kept only for the homepage prefetch and loader fallback).
+- GitHub Actions CI (`ci.yml`) now enforces:
+  `npm ci` → `npm run build` → content-hash consistency check →
+  fail if the build produces uncommitted changes → backend `unittest` →
+  local smoke (assets, manifest, chunks, `/api/health`, `/api/warmup`,
+  cache headers, Range).
+- Do not set a custom Vercel `buildCommand`; Python dependencies must be
+  installed by Vercel's default Python runtime from `requirements.txt`.
+
+## Performance Metrics
+
+- Frontend sends `marks`, `metrics` (e.g. `project_click->canvas_ready`,
+  `document_loaded->canvas_ready`, `canvas_api_start->canvas_api_complete`,
+  `render_start->canvas_first_frame`) and safe `meta` (node/connection/media
+  counts, canvas payload bytes, core cache hit) to `POST /api/perf` with a
+  `phase` of `cold` / `warm` / `homepage-warmed` / `prefetched`.
+- Backend stores metrics in Neon `perf_events` (and an in-memory ring as
+  fallback), then `GET /api/perf/summary?hours=24` returns P50/P75/P95 per
+  phase + metric. No user content, node text, media URLs, canvas IDs or
+  database connection strings are recorded.

@@ -1,3 +1,28 @@
+// 构建版本一致性：旧页面引用新部署资源时，最多自动刷新一次（sessionStorage 防循环）
+(function(){
+    try {
+        const buildId = (window.CANVAS_BUILD || {}).buildId;
+        if(buildId){
+            let saved = null;
+            let reloaded = null;
+            try {
+                saved = sessionStorage.getItem('canvas_build_id');
+                reloaded = sessionStorage.getItem('canvas_build_reloaded');
+            } catch(e) {}
+            if(saved && saved !== buildId && reloaded !== buildId){
+                try { sessionStorage.setItem('canvas_build_reloaded', buildId); } catch(e) {}
+                location.reload();
+                return;
+            }
+            try { sessionStorage.setItem('canvas_build_id', buildId); } catch(e) {}
+        }
+    } catch(e) {}
+})();
+try {
+    window.__perfMarks = window.__perfMarks || [];
+    window.__perfMarks.push({name:'navigation_start', t:0});
+    window.__perfMarks.push({name:'canvas_core_loaded', t: Math.round(performance.now())});
+} catch(e) {}
 function refreshIcons(){ if(window.lucide) lucide.createIcons(); }
 refreshIcons();
 function tr(key){ return window.StudioI18n ? StudioI18n.t(key) : key; }
@@ -1344,19 +1369,49 @@ function reportPerf(){
         window.__perfReported = true;
         const marks = window.__perfMarks || [];
         let phase = 'cold';
+        let prefetched = false;
         try {
             const now = Date.now();
             const id = (typeof canvas !== 'undefined' && canvas?.id) ? String(canvas.id) : '';
             const homeWarm = Number(sessionStorage.getItem('canvas_home_warmup_at') || 0);
             if(homeWarm && now - homeWarm < 5 * 60 * 1000) phase = 'homepage-warmed';
-            else if(id && sessionStorage.getItem('canvas_prefetched_' + id)) phase = 'prefetched';
+            else if(id && sessionStorage.getItem('canvas_prefetched_' + id)) { phase = 'prefetched'; prefetched = true; }
             else {
                 const lastReady = Number(sessionStorage.getItem('canvas_last_ready_at') || 0);
                 if(lastReady && now - lastReady < 5 * 60 * 1000) phase = 'warm';
             }
             sessionStorage.setItem('canvas_last_ready_at', String(now));
         } catch(e) {}
-        const body = JSON.stringify({route: 'canvas', phase, marks});
+        const t = name => {
+            const item = marks.find(x => x.name === name);
+            return item ? Number(item.t) : null;
+        };
+        const metrics = [];
+        const addMetric = (name, a, b) => {
+            if(a != null && b != null && b >= a) metrics.push({name, value_ms: Math.round(b - a)});
+        };
+        addMetric('document_loaded->canvas_ready', t('document_loaded'), t('canvas_ready'));
+        addMetric('canvas_api_start->canvas_api_complete', t('canvas_api_start'), t('canvas_api_complete'));
+        addMetric('render_start->canvas_first_frame', t('canvas_render_start'), t('canvas_first_frame'));
+        addMetric('navigation_start->canvas_ready', 0, t('canvas_ready'));
+        try {
+            const clickAt = Number(sessionStorage.getItem('canvas_project_click_at') || 0);
+            if(clickAt && t('canvas_ready') != null){
+                const navDelay = Math.max(0, performance.timeOrigin - clickAt);
+                metrics.push({name:'project_click->canvas_ready', value_ms: Math.round(navDelay + t('canvas_ready'))});
+            }
+        } catch(e) {}
+        const meta = {};
+        try {
+            if(Array.isArray(nodes)) meta.node_count = nodes.length;
+            if(Array.isArray(connections)) meta.connection_count = connections.length;
+            if(Array.isArray(nodes)) meta.media_count = nodes.filter(n => n && (n.url || (n.generatedOutputs && n.generatedOutputs.length))).length;
+            if(window.__canvasPayloadBytes) meta.canvas_bytes = window.__canvasPayloadBytes;
+            const coreRes = (performance.getEntriesByType('resource') || []).find(r => /canvas-core-[^/]+\.js/.test(r.name));
+            if(coreRes) meta.core_cached = Number(coreRes.transferSize) === 0;
+            meta.prefetched = prefetched;
+        } catch(e) {}
+        const body = JSON.stringify({route: 'canvas', phase, marks, metrics, meta});
         if(navigator.sendBeacon) navigator.sendBeacon('/api/perf', new Blob([body], {type:'application/json'}));
     } catch(e) {}
 }
@@ -2469,6 +2524,9 @@ async function openCanvas(id){
             }
             if(!res.ok) throw new Error(tr('canvas.openFailed'));
             data = await res.json();
+            try {
+                window.__canvasPayloadBytes = Number(res.headers.get('content-length')) || (data ? JSON.stringify(data).length : 0);
+            } catch(e) {}
         } catch(remoteErr) {
             const local = loadLocalCanvas(id);
             if(!local) throw remoteErr;
@@ -14693,23 +14751,52 @@ const __canvasLazyChunks = {};
 function __canvasLazyLoad(name){
     if(window.__canvasChunkLoaded && window.__canvasChunkLoaded[name]) return Promise.resolve(true);
     if(__canvasLazyChunks[name]) return __canvasLazyChunks[name];
-    const build = window.CANVAS_BUILD || {};
-    const src = build[name] || `/static/js/build/${name}.js`;
-    __canvasLazyChunks[name] = new Promise((resolve, reject) => {
+    const startLoad = () => {
+        const build = window.CANVAS_BUILD || {};
+        const chunkFile = (build.chunks && build.chunks[name]);
+        const src = chunkFile ? `/static/js/build/${chunkFile}` : `/static/js/build/${name}.js`;
+        return new Promise((resolve, reject) => {
         const script = document.createElement('script');
+        const timer = setTimeout(() => {
+            script.remove();
+            reject(new Error('chunk load timeout: ' + name));
+        }, 15000);
         script.src = src;
         script.onload = () => {
+            clearTimeout(timer);
             window.__canvasChunkLoaded = window.__canvasChunkLoaded || {};
             window.__canvasChunkLoaded[name] = true;
             resolve(true);
         };
         script.onerror = () => {
-            delete __canvasLazyChunks[name];
-            reject(new Error('chunk load failed: ' + name));
+            clearTimeout(timer);
+            script.remove();
+            reject(new Error('chunk load failed: ' + name + ' (' + src + ')'));
         };
         document.head.appendChild(script);
+        });
+    };
+    __canvasLazyChunks[name] = startLoad().catch(err => {
+        // 首次失败：清除 Promise 缓存，拉取最新构建映射后只重试一次
+        delete __canvasLazyChunks[name];
+        return __canvasRefreshBuild().catch(() => false).then(() => startLoad());
     });
     return __canvasLazyChunks[name];
+}
+function __canvasRefreshBuild(){
+    try {
+        return fetch('/static/js/build/manifest.js?v=' + Date.now(), {cache:'no-store', credentials:'same-origin'})
+            .then(res => res.ok ? res.text() : Promise.reject(new Error('manifest fetch failed')))
+            .then(text => {
+                const m = /window\.CANVAS_BUILD\s*=\s*(\{.*?\});/.exec(text);
+                if(!m) return;
+                const next = JSON.parse(m[1]);
+                if(!next || !next.chunks) return;
+                window.CANVAS_BUILD = next;
+                window.__canvasChunkLoaded = {};
+            })
+            .catch(() => {});
+    } catch(e) { return Promise.resolve(); }
 }
 function __canvasLazyInvoke(name, fnName, args, fallbackMsg){
     return __canvasLazyLoad(name).then(() => {

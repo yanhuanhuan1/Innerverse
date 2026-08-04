@@ -19,6 +19,7 @@ import shutil
 import glob
 import asyncio
 import logging
+from collections import deque
 import requests
 import zipfile
 import mimetypes
@@ -1753,7 +1754,10 @@ async def static_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     try:
-        if path.startswith("/static/js/build/") and not path.endswith(".html"):
+        if path.endswith("/static/js/build/manifest.js"):
+            # manifest 内容随构建变化，URL 不带 hash，不能长期缓存
+            response.headers.setdefault("Cache-Control", "no-cache")
+        elif path.startswith("/static/js/build/") and not path.endswith(".html"):
             response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
         elif path.startswith("/static/") and "v=" in request.url.query and not path.endswith(".html"):
             response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
@@ -7692,6 +7696,48 @@ def generate_video_preview_image(path: str, width: int) -> Any:
         except OSError:
             pass
 
+def build_media_preview_from_path(path, width):
+    """为本地媒体文件生成/返回缓存缩略图（webp 优先，命中缓存直接返回）。"""
+    if not path or not os.path.isfile(path):
+        return None, ""
+    width = max(64, min(2048, int(width or 512)))
+    stat = os.stat(path)
+    webp_path, png_path = media_preview_cache_paths_for_seed(path, width, stat.st_mtime_ns, stat.st_size)
+    if os.path.exists(webp_path):
+        return webp_path, "image/webp"
+    if os.path.exists(png_path):
+        return png_path, "image/png"
+    Image, ImageOps = pil_modules()
+    os.makedirs(MEDIA_PREVIEW_DIR, exist_ok=True)
+    if is_video_preview_file(path):
+        img = generate_video_preview_image(path, width)
+    else:
+        with Image.open(path) as source_img:
+            img = ImageOps.exif_transpose(source_img)
+            img.thumbnail((width, width), Image.LANCZOS)
+            img = img.convert("RGBA" if image_has_alpha(img) else "RGB")
+    try:
+        img.save(webp_path, format="WEBP", quality=80, method=1)
+        return webp_path, "image/webp"
+    except Exception:
+        img.save(png_path, format="PNG")
+        return png_path, "image/png"
+
+def warm_media_previews(url, widths=(256, 512, 768, 1024)):
+    """生成/上传完成后预生成常用尺寸缩略图，避免首页或画布首屏现场生成。"""
+    try:
+        local = canvas_asset_url_to_local_path(url)
+        if not local or not os.path.isfile(local):
+            return
+        for width in widths:
+            try:
+                build_media_preview_from_path(local, width)
+            except Exception as exc:
+                logger.info(f"[media-preview] warm failed width={width} url={url}: {exc}")
+                break
+    except Exception:
+        pass
+
 @app.get("/api/media-preview")
 async def media_preview(url: str, w: int = 512):
     local = canvas_asset_url_to_local_path(url)
@@ -10105,7 +10151,9 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
             path = output_path_for(filename, category)
         with open(path, "wb") as f:
             f.write(base64.b64decode(image_data["value"]))
-        return output_url_for(filename, category)
+        result_url = output_url_for(filename, category)
+        warm_media_previews(result_url)
+        return result_url
     value = image_data["value"]
     if value.startswith("/output/") or value.startswith("/assets/"):
         return value
@@ -10124,7 +10172,9 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
                 path = output_path_for(filename, category)
             with open(path, "wb") as f:
                 f.write(response.content)
-            return output_url_for(filename, category)
+            result_url = output_url_for(filename, category)
+            warm_media_previews(result_url)
+            return result_url
     except Exception as e:
         logger.info(f"保存上游图片失败: {e}; url={value}")
         return value
@@ -12920,6 +12970,7 @@ async def upload_local_assets(files: List[UploadFile] = File(...), folder: str =
         with open(path, "wb") as f:
             f.write(content)
         persist_media_file(path)
+        warm_media_previews(f"/assets/{urllib.parse.quote(rel_name, safe='/')}")
         if kind == "image":
             classification = await classify_asset_image_best_effort(path)
             if classification:
@@ -13929,18 +13980,69 @@ async def api_warmup():
     return JSONResponse({"ok": True, "db": db_ok}, headers={"Server-Timing": st.header()})
 
 
+_PERF_RING = deque(maxlen=2000)
+_PERF_SAFE_META_KEYS = {"node_count", "connection_count", "media_count", "canvas_bytes", "core_cached", "prefetched"}
+
 @app.post("/api/perf")
 async def perf_marks(payload: Dict[str, Any]):
-    """接收前端性能标记（非敏感、不鉴权、仅记录，用于定位首屏耗时）。"""
+    """接收前端性能标记与指标（非敏感、不鉴权、仅记录，用于定位首屏耗时）。
+    只记录指标名与数值以及白名单内的轻量元数据，不接收任何用户内容。"""
     try:
         marks = payload.get("marks") if isinstance(payload.get("marks"), list) else []
         route = str(payload.get("route") or "canvas")[:60]
         phase = str(payload.get("phase") or "")[:40]
         summary = {str(item.get("name") or ""): round(float(item.get("t") or 0)) for item in marks if isinstance(item, dict)}
-        logger.info(f"[perf] route={route} phase={phase} marks={json.dumps(summary, ensure_ascii=False)[:500]}")
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
+        raw_meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        safe_meta = {k: v for k, v in raw_meta.items() if k in _PERF_SAFE_META_KEYS}
+        _PERF_RING.append({"ts": time.time(), "route": route, "phase": phase, "marks": summary, "metrics": metrics, "meta": safe_meta})
+        for item in metrics:
+            if isinstance(item, dict) and item.get("name"):
+                try:
+                    value_ms = float(item.get("value_ms") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if value_ms >= 0:
+                    storage_db.perf_record(phase, str(item.get("name"))[:80], value_ms, safe_meta)
+        logger.info(f"[perf] route={route} phase={phase} marks={json.dumps(summary, ensure_ascii=False)[:400]} metrics={json.dumps(metrics, ensure_ascii=False)[:400]}")
     except Exception as exc:
         logger.info(f"[perf] ignore malformed payload: {exc}")
     return {"ok": True}
+
+@app.get("/api/perf/summary")
+async def perf_summary_api(hours: int = 24):
+    """按 phase + metric 返回 P50/P75/P95 聚合（用于观察 project_click → canvas_ready 等指标）。"""
+    try:
+        hours = max(1, min(24 * 30, int(hours or 24)))
+    except (TypeError, ValueError):
+        hours = 24
+    rows = storage_db.perf_summary(hours)
+    ring_events = [e for e in _PERF_RING if time.time() - e.get("ts", 0) <= hours * 3600]
+    if not rows and ring_events:
+        groups = {}
+        for event in ring_events:
+            phase = event.get("phase") or ""
+            for item in event.get("metrics") or []:
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
+                try:
+                    value_ms = float(item.get("value_ms") or 0)
+                except (TypeError, ValueError):
+                    continue
+                groups.setdefault((phase, str(item.get("name"))), []).append(value_ms)
+        for (phase, metric), values in groups.items():
+            values.sort()
+            n = len(values)
+            percentile = lambda q: values[min(n - 1, int(q * n))] if n else 0
+            rows.append({
+                "phase": phase,
+                "metric": metric,
+                "n": n,
+                "p50": percentile(0.50),
+                "p75": percentile(0.75),
+                "p95": percentile(0.95),
+            })
+    return {"hours": hours, "events": len(ring_events), "rows": rows}
 
 @app.put("/api/providers")
 async def save_providers(payload: List[ApiProviderPayload]):

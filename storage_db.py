@@ -201,6 +201,21 @@ def _ensure_schema(conn) -> bool:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS perf_events (
+                id BIGSERIAL PRIMARY KEY,
+                phase TEXT NOT NULL DEFAULT '',
+                metric TEXT NOT NULL DEFAULT '',
+                value_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+                meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_perf_events_phase_metric ON perf_events (phase, metric, created_at)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -418,6 +433,58 @@ def media_exists(key: str) -> bool:
         except Exception as exc:
             logger.info(f"[storage_db] media_exists failed ({key}): {type(exc).__name__}")
             return False
+
+
+def perf_record(phase: str, metric: str, value_ms: float, meta=None) -> bool:
+    """记录一条性能指标（不含任何用户内容）。"""
+    if not is_configured():
+        return False
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return False
+        try:
+            payload = json.dumps(meta or {}, ensure_ascii=False, default=str)
+            conn.execute(
+                """
+                INSERT INTO perf_events (phase, metric, value_ms, meta, created_at)
+                VALUES (%s, %s, %s, %s::jsonb, now())
+                """,
+                (str(phase or "")[:40], str(metric or "")[:80], float(value_ms or 0), payload),
+            )
+            return True
+        except Exception as exc:
+            logger.info(f"[storage_db] perf_record failed: {type(exc).__name__}")
+            return False
+
+
+def perf_summary(hours: int = 24) -> List[Dict[str, Any]]:
+    """按 phase + metric 返回 P50/P75/P95 聚合。"""
+    if not is_configured():
+        return []
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return []
+        try:
+            cur = conn.execute(
+                """
+                SELECT phase, metric, count(*) AS n,
+                       percentile_cont(0.50) WITHIN GROUP (ORDER BY value_ms) AS p50,
+                       percentile_cont(0.75) WITHIN GROUP (ORDER BY value_ms) AS p75,
+                       percentile_cont(0.95) WITHIN GROUP (ORDER BY value_ms) AS p95
+                FROM perf_events
+                WHERE created_at > now() - make_interval(hours => %s)
+                GROUP BY phase, metric
+                ORDER BY phase, metric
+                """,
+                (int(hours or 24),),
+            )
+            columns = ["phase", "metric", "n", "p50", "p75", "p95"]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+        except Exception as exc:
+            logger.info(f"[storage_db] perf_summary failed: {type(exc).__name__}")
+            return []
 
 
 def _json_payload(data: Dict[str, Any]) -> str:

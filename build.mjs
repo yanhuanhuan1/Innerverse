@@ -223,6 +223,7 @@ for(const name of ['canvas-logs', 'canvas-lightbox', 'canvas-export', 'canvas-wo
 
 // ---------- 3) 清单 ----------
 const manifest = {
+  buildId: hash(core.fileName + '|' + lucideFile + '|' + Object.entries(chunks).map(([k, v]) => k + ':' + v.fileName).sort().join('|')),
   core: core.fileName,
   lucide: lucideFile,
   chunks: Object.fromEntries(Object.entries(chunks).map(([k, v]) => [k, v.fileName])),
@@ -235,13 +236,17 @@ const htmlPath = path.join(ROOT, 'static', 'canvas.html');
 let html = fs.readFileSync(htmlPath, 'utf8');
 // 移除旧的 build 引用（容忍 ?v= 后缀），再插入当前产物
 html = html.replace(/<script defer src="\/static\/(?:vendor\/js\/lucide\.js|js\/build\/lucide-slim-[^"']+)(\?v=[^"']*)?"?><\/script>/, '');
-html = html.replace(/<script src="\/static\/js\/build\/manifest\.js(\?v=[^"']*)?"?><\/script>/, '');
 html = html.replace(/<script defer src="\/static\/js\/build\/canvas-core-[^"']+(\?v=[^"']*)?"?><\/script>/, '');
 html = html.replace(/<script defer src="\/static\/js\/canvas\.js(\?v=[^"']*)?"?><\/script>/, '');
 const lucideTag = `    <script defer src="/static/js/build/${lucideFile}"></script>`;
-const coreTags = `    <script src="/static/js/build/manifest.js"></script>\n    <script defer src="/static/js/build/${core.fileName}"></script>`;
+const inlineBuild = `    <script>window.CANVAS_BUILD = ${JSON.stringify({buildId: manifest.buildId, chunks: manifest.chunks})};</script>`;
+const coreTag = `    <script defer src="/static/js/build/${core.fileName}"></script>`;
+// remove previously injected inline build mapping to avoid duplicates
+html = html.replace(/<script>window\.CANVAS_BUILD\s*=\s*\{.*?\};<\/script>/, '');
 // 插到 </head> 前（保持 CSS 之后）
-html = html.replace('</head>', `${lucideTag}\n${coreTags}\n</head>`);
+html = html.replace(/<script src="\/static\/js\/build\/manifest\.js(\?v=[^"']*)?"?><\/script>/, inlineBuild);
+const headInsert = `${lucideTag}\n${coreTag}\n</head>`;
+html = html.replace('</head>', html.includes(inlineBuild) ? headInsert : `${lucideTag}\n${inlineBuild}\n${coreTag}\n</head>`);
 html = html.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 fs.writeFileSync(htmlPath, html);
 
