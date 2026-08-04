@@ -16,6 +16,7 @@ API/.env
 
 # Runtime data
 assets/
+node_modules/
 output/
 history.json
 global_config.json

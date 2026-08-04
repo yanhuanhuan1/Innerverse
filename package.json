@@ -1,0 +1,12 @@
+{
+  "name": "innerverse-canvas",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "lucide": "^1.0.0"
+  }
+}

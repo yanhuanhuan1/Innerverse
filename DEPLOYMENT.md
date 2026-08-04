@@ -132,6 +132,17 @@ Vercel Functions have an ephemeral filesystem. Runtime canvas data and uploaded 
 
 Vercel Functions 的文件系统是临时的。生产环境如需长期保存画布、素材和生成记录，下一阶段建议接入对象存储和数据库，例如 Vercel Blob、S3-compatible storage、Postgres 或 Redis。
 
+## Frontend Build
+
+前端做了内容级拆包（canvas-core + 按需加载 chunk）与 Lucide 精简构建。构建命令：
+
+```bash
+npm install --no-audit --no-fund
+npm run build   # 运行 build.mjs：压缩核心与 chunk、生成 lucide-slim、内容 hash 与 manifest，并改写 canvas.html 引用
+```
+
+Vercel 已在 `vercel.json` 配置 `installCommand` 与 `buildCommand`，部署时自动执行。构建产物输出到 `static/js/build/`（带内容 hash），由静态中间件按 immutable 长期缓存；`canvas.html` 只引用 `manifest.js` + 带 hash 的 `canvas-core` 与 `lucide-slim`，非首屏功能（日志/灯箱/导出/工作流/媒体/节点渲染器）由核心按需加载对应 chunk。
+
 ## Database Connection (Vercel + Neon)
 
 画布数据存储在 Postgres（生产推荐 Neon）的 `kv_documents` 表中。连接策略：

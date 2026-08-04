@@ -604,8 +604,23 @@ function canvasPrefetchAssets(id){
     add(canvasUrl(canvas), 'document');
     add('/static/css/canvas.css?v=' + CANVAS_ASSET_VERSION, 'style');
     add('/static/css/canvas-tailwind.css?v=2026.08.04.perf1', 'style');
-    add('/static/js/canvas.js?v=' + CANVAS_ASSET_VERSION, 'script');
-    add('/static/js/lucide.js?v=2026.07.23.1784878252', 'script');
+    add('/static/js/build/manifest.js', 'script');
+    // 核心与 lucide 文件名带内容 hash：先读清单拿到准确文件名再预取
+    try {
+        fetch('/static/js/build/manifest.js', {cache:'force-cache'})
+            .then(r => r.text())
+            .then(text => {
+                const m = /window\.CANVAS_BUILD\s*=\s*(\{.*?\});/.exec(text);
+                if(m){
+                    const manifest = JSON.parse(m[1]);
+                    if(manifest.core) add('/static/js/build/' + manifest.core, 'script');
+                    if(manifest.lucide) add('/static/js/build/' + manifest.lucide, 'script');
+                }
+            })
+            .catch(() => {
+                add('/static/js/canvas.js?v=' + CANVAS_ASSET_VERSION, 'script');
+            });
+    } catch(e) {}
     add('/static/vendor/fonts/inter-2.ttf', 'font');
     add('/static/vendor/fonts/inter-4.ttf', 'font');
 }

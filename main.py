@@ -1722,7 +1722,9 @@ async def static_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     try:
-        if path.startswith("/static/") and "v=" in request.url.query and not path.endswith(".html"):
+        if path.startswith("/static/js/build/") and not path.endswith(".html"):
+            response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        elif path.startswith("/static/") and "v=" in request.url.query and not path.endswith(".html"):
             response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
         elif path.startswith(("/assets/", "/output/")):
             response.headers.setdefault("Cache-Control", "public, max-age=86400")
