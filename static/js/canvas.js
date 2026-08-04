@@ -13474,6 +13474,7 @@ function deleteNode(id, event){
     connections = connections.filter(c => c.from !== id && c.to !== id);
     selected.delete(id);
     removeNodeElements([id]);
+    updateCanvasEmptyHint();
     scheduleSave();
 }
 function clearNodeContentBeforeDelete(id){
@@ -16403,6 +16404,7 @@ function deleteSelectedNodes(){
     connections = connections.filter(c => !toDelete.has(c.from) && !toDelete.has(c.to));
     selected.clear();
     removeNodeElements([...toDelete]);
+    updateCanvasEmptyHint();
     scheduleSave();
 }
 function hasImageFiles(items){
