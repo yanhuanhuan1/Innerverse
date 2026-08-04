@@ -17,6 +17,10 @@ API/.env
 # Runtime data
 assets/
 node_modules/
+data/projects-*.json
+data/canvases/
+data/canvas_tasks/
+data/media_previews/
 output/
 history.json
 global_config.json
