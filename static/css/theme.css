@@ -79,9 +79,9 @@ body.studio-theme-dark .nav-item:hover {
 
 html.studio-theme-dark body .nav-item.active,
 body.studio-theme-dark .nav-item.active {
-    background: #d8dee9 !important;
-    color: #10141d !important;
-    box-shadow: 0 12px 24px rgba(0,0,0,.28);
+    background: #2b1d19 !important;
+    color: #f0b9a3 !important;
+    box-shadow: none;
 }
 
 html.studio-theme-dark body .logo-ring,

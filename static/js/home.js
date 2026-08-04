@@ -8,8 +8,16 @@ const promptForm = document.getElementById('promptForm');
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('homeStatus');
 const recentGrid = document.getElementById('recentGrid');
+const quickTags = document.getElementById('quickTags');
+const uploadStatus = document.getElementById('uploadStatus');
+const dropHint = document.getElementById('dropHint');
+const assetLibraryLink = document.getElementById('assetLibraryLink');
+const recentEmpty = document.getElementById('recentEmpty');
+const recentStatus = document.getElementById('recentStatus');
+const recentRetryBtn = document.getElementById('recentRetryBtn');
 const homeThemeBtn = document.getElementById('homeThemeBtn');
 const homeLanguageBtn = document.getElementById('homeLanguageBtn');
+const homeUserMenu = document.getElementById('homeUserMenu');
 const emailLoginBtn = document.getElementById('emailLoginBtn');
 const emailLoginModal = document.getElementById('emailLoginModal');
 const emailLoginForm = document.getElementById('emailLoginForm');
@@ -43,6 +51,8 @@ let homeFocus = 'hero';
 let homeWheelGate = 0;
 let emailCodeCooldownTimer = null;
 let authMode = 'login';
+let homeAttachedAssets = [];
+let homeCreating = false;
 const LOCAL_PROJECTS_KEY = 'innerverse_local_projects';
 const LOCAL_CANVASES_KEY = 'innerverse_local_canvases';
 
@@ -151,18 +161,23 @@ function applyHomeStaticCopy(){
         const el = document.querySelector(selector);
         if(el) el.textContent = L(zh, en);
     };
-    setText('.hero-kicker', '方寸万象', 'Innerverse');
-    if(promptInput) promptInput.placeholder = L('描述你的创作需求……', 'Describe your creative request...');
-    setText('#attachBtn span', '从素材开始', 'Start from assets');
-    setText('#startBtn span', '开始创作', 'Start creating');
-    setText('#recentTitleBtn h2', '项目', 'Projects');
-    setText('#recentTitleBtn p', '所有项目都在这里，点击项目直接进入画布。', 'All projects are here. Click one to enter its canvas.');
-    setText('#projectQuickCreate span', '新建项目', 'New project');
+    setText('.hero-title', '方寸万象', 'Innerverse');
+    setText('.hero-sub', '你的智能创作助手，帮你完成从灵感到视觉成果', 'Your AI creative assistant, from idea to visual result');
+    if(promptInput) promptInput.placeholder = L('描述你想创作的内容，或将图片和文件拖到这里', 'Describe what you want to create, or drag images and files here');
+    setText('#attachBtn span', '上传素材', 'Upload assets');
+    setText('#startBtn span', '使用 AI 创建', 'Create with AI');
+    setText('#recentHeading', '最近项目', 'Recent projects');
     setText('#emailLoginBtn span', '登录', 'Sign in');
+    setText('#recentErrorText', '项目加载失败', 'Failed to load projects');
+    setText('#recentRetryBtn', '重新加载', 'Reload');
+    setText('#homeThemeBtn span', '切换主题', 'Toggle theme');
+    setText('#homeLogoutBtn span', '退出登录', 'Sign out');
     setText('#authLoginTab', '登录', 'Sign in');
     setText('#authRegisterTab', '注册', 'Create account');
     setText('#emailCodeFallbackBtn', authMode === 'code' ? '使用密码登录' : '使用邮箱验证码登录', authMode === 'code' ? 'Use password sign-in' : 'Use email code instead');
     setText('#verifyEmailCodeBtn', authMode === 'register' ? '注册并登录' : '登录', authMode === 'register' ? 'Create account' : 'Sign in');
+    renderQuickTags();
+    updateUploadStatus();
     if(authMode) setAuthMode(authMode, {silent:true});
 }
 
@@ -201,7 +216,8 @@ function currentTheme(){
 function syncHomeHeaderControls(){
     const dark = currentTheme() === 'dark';
     if(homeThemeBtn) {
-        homeThemeBtn.innerHTML = dark ? '<i data-lucide="sun"></i>' : '<i data-lucide="moon"></i>';
+        const icon = homeThemeBtn.querySelector('i');
+        if(icon) icon.dataset.lucide = dark ? 'sun' : 'moon';
         homeThemeBtn.title = dark ? L('切换为浅色主题','Switch to light theme') : L('切换为深色主题','Switch to dark theme');
         homeThemeBtn.setAttribute('aria-label', homeThemeBtn.title);
     }
@@ -246,7 +262,8 @@ window.toggleHomeLanguage = toggleHomeLanguage;
 
 function focusProjectsSection(){
     homeFocus = 'projects';
-    document.querySelector('.home-shell')?.classList.add('projects-focused');
+    const target = document.getElementById('recentSection');
+    if(target) target.scrollIntoView({behavior:'smooth', block:'start'});
     try {
         if(window.parent && window.parent !== window) {
             window.parent.postMessage({type:'home:section-focus', section:'projects'}, window.location.origin);
@@ -256,30 +273,12 @@ function focusProjectsSection(){
 
 function focusHeroSection(){
     homeFocus = 'hero';
-    document.querySelector('.home-shell')?.classList.remove('projects-focused');
+    window.scrollTo({top:0, behavior:'smooth'});
     try {
         if(window.parent && window.parent !== window) {
             window.parent.postMessage({type:'home:section-focus', section:'home'}, window.location.origin);
         }
     } catch(e) {}
-}
-
-function onHomeWheel(event){
-    const now = Date.now();
-    if(now - homeWheelGate < 650) return;
-    if(homeFocus === 'hero' && event.deltaY > 18) {
-        event.preventDefault();
-        homeWheelGate = now;
-        focusProjectsSection();
-        return;
-    }
-    if(homeFocus === 'projects' && event.deltaY < -18) {
-        const grid = event.target.closest?.('.recent-grid');
-        if(grid && grid.scrollTop > 0) return;
-        event.preventDefault();
-        homeWheelGate = now;
-        focusHeroSection();
-    }
 }
 
 function handleHostMessage(event){
@@ -730,12 +729,17 @@ async function createCanvasInProject({title, projectId, prompt='', mode=currentM
 }
 
 async function startCreativeProject(prompt='', mode=currentMode){
+    if(homeCreating) return;
     if(mode === 'assets'){
         openShellPage('asset-manager');
         return;
     }
     if(!requireLogin()) return;
+    homeCreating = true;
     startBtn.disabled = true;
+    startBtn.classList.add('is-loading');
+    const startLabel = startBtn.querySelector('span');
+    if(startLabel) startLabel.textContent = L('正在创建…','Creating...');
     showStatus(L('正在创建画布…','Creating canvas...'));
     try {
         const nameSeed = (prompt || '').trim().slice(0, 24);
@@ -770,7 +774,11 @@ async function startCreativeProject(prompt='', mode=currentMode){
         console.error(err);
         showStatus(L('创建失败，请稍后重试','Create failed, please retry'));
     } finally {
+        homeCreating = false;
         startBtn.disabled = false;
+        startBtn.classList.remove('is-loading');
+        if(startLabel) startLabel.textContent = L('使用 AI 创建','Create with AI');
+        updateStartState();
     }
 }
 
@@ -912,13 +920,154 @@ async function deleteProject(projectId){
     }
 }
 
+// ===== 新首页：快捷标签 / 上传 / 封面 / 骨架屏 =====
+const QUICK_TAG_ITEMS = [
+    {icon:'image', zh:'图片生成', en:'Image', prompt:'创建一张明亮通透的森林风景插画，细节丰富'},
+    {icon:'video', zh:'视频生成', en:'Video', prompt:'将这张产品图生成一段自然运镜的展示视频'},
+    {icon:'sofa', zh:'室内设计', en:'Interior', prompt:'根据参考图片创建一套现代客厅设计方案'},
+    {icon:'palette', zh:'品牌视觉', en:'Brand', prompt:'为产品设计一套简洁现代的品牌主视觉'},
+    {icon:'shopping-bag', zh:'电商产品', en:'Product', prompt:'生成一张干净的电商产品展示图，突出质感'},
+    {icon:'lightbulb', zh:'灵感整理', en:'Ideas', prompt:'帮我整理这些灵感，输出一份结构清晰的创意方案'}
+];
+function renderQuickTags(){
+    if(!quickTags) return;
+    quickTags.innerHTML = QUICK_TAG_ITEMS.map(tag => `
+        <button type="button" class="tag-btn" data-tag-prompt="${escapeHtml(tag.prompt)}" title="${escapeHtml(L(tag.zh, tag.en))}">
+            <i data-lucide="${tag.icon}"></i><span>${escapeHtml(L(tag.zh, tag.en))}</span>
+        </button>`).join('');
+    quickTags.querySelectorAll('[data-tag-prompt]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if(!promptInput) return;
+            promptInput.value = btn.dataset.tagPrompt || '';
+            resizePrompt();
+            updateStartState();
+            promptInput.focus();
+        });
+    });
+    refreshIcons();
+}
+
+function formatRelativeTime(value){
+    if(!value) return '';
+    const raw = Number(value);
+    const time = raw < 10000000000 ? raw * 1000 : raw;
+    const date = new Date(time);
+    if(Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const startOfDay = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const dayDiff = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+    const hm = `${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+    const prefix = L('更新于', 'Updated');
+    if(dayDiff === 0) return `${prefix}${L('今天',' today ')}${hm}`;
+    if(dayDiff === 1) return `${prefix}${L('昨天',' yesterday ')}${hm}`;
+    const md = langIsEn() ? `${date.getMonth() + 1}/${date.getDate()}` : `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+    return `${prefix} ${md}`;
+}
+
+function formatDuration(value){
+    const raw = Math.max(0, Number(value) || 0);
+    if(!raw) return '';
+    const secs = raw < 1000 ? Math.round(raw) : Math.round(raw / 1000);
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function placeholderCoverHtml(){
+    return `<span class="cover-media cover-placeholder"><i data-lucide="layout-grid"></i></span>`;
+}
+
+function coverHtml(asset){
+    const thumb = asset?.thumbnailUrl || '';
+    if(thumb){
+        const isVideo = asset.type === 'video';
+        const duration = asset.duration ? formatDuration(asset.duration) : '';
+        return `<span class="cover-media">
+            <img class="cover-img" src="${escapeHtml(thumb)}" alt="" loading="lazy" decoding="async" data-cover-img>
+            ${isVideo ? '<span class="cover-video-badge"><i data-lucide="play"></i></span>' : ''}
+            ${duration ? `<span class="cover-duration">${escapeHtml(duration)}</span>` : ''}
+        </span>`;
+    }
+    return placeholderCoverHtml();
+}
+
+function newProjectCardHtml(opts={}){
+    const auth = Boolean(opts.auth);
+    const title = auth ? L('登录后开始','Sign in to start') : L('新建项目','New Project');
+    const hint = auth ? L('登录后项目会按用户隔离保存','Projects are private after sign-in') : L('创建空白画布','Create a blank canvas');
+    return `<button class="project-card new" type="button" ${auth ? 'data-auth-login' : 'data-new-canvas'} aria-label="${escapeHtml(title)}">
+        <span class="card-cover new-cover"><i data-lucide="plus"></i></span>
+        <span class="card-body">
+            <span class="project-name">${escapeHtml(title)}</span>
+            <span class="project-updated">${escapeHtml(hint)}</span>
+        </span>
+    </button>`;
+}
+
+function projectCardHtml(project){
+    const menuOpen = projectMenuProjectId === project.id;
+    const confirmOpen = pendingDeleteProjectId === project.id;
+    const updated = formatRelativeTime(latestCanvasInProject(project.id)?.updated_at || project.updated_at);
+    return `<div class="project-card" role="button" tabindex="0" data-project-open="${escapeHtml(project.id)}">
+        <div class="card-cover">
+            ${coverHtml(project.latestVisualAsset || null)}
+            <button class="project-card-more" type="button" data-project-menu="${escapeHtml(project.id)}" title="${L('项目选项','Project options')}" aria-label="${L('项目选项','Project options')}"><i data-lucide="more-horizontal"></i></button>
+            ${menuOpen ? `<div class="project-options-popover" data-project-popover>
+                <button type="button" class="project-option-item" data-project-rename="${escapeHtml(project.id)}"><i data-lucide="pencil"></i><span>${L('修改名字','Rename')}</span></button>
+                <button type="button" class="project-option-item danger" data-project-delete="${escapeHtml(project.id)}"><i data-lucide="trash-2"></i><span>${L('删除项目','Delete project')}</span></button>
+            </div>` : ''}
+            ${confirmOpen ? `<div class="project-delete-confirm">
+                <p>${L('删除项目','Delete project')}「${escapeHtml(project.name || '')}」？</p>
+                <div>
+                    <button type="button" class="confirm-danger" data-project-delete-confirm="${escapeHtml(project.id)}">${L('删除','Delete')}</button>
+                    <button type="button" class="confirm-ghost" data-project-delete-cancel>${L('取消','Cancel')}</button>
+                </div>
+            </div>` : ''}
+        </div>
+        <div class="card-body">
+            <p class="project-name">${escapeHtml(project.name || L('未命名项目','Untitled project'))}</p>
+            <p class="project-updated">${escapeHtml(updated)}</p>
+        </div>
+    </div>`;
+}
+
+function showRecentHint(text){
+    if(!recentEmpty) return;
+    if(text){
+        recentEmpty.hidden = false;
+        recentEmpty.textContent = text;
+    } else {
+        recentEmpty.hidden = true;
+    }
+}
+
+function hideRecentHint(){ showRecentHint(''); }
+
+function renderHomeSkeleton(){
+    if(!recentGrid) return;
+    recentGrid.innerHTML = Array.from({length:5}, () => `
+        <div class="skeleton-card skeleton-pulse">
+            <div class="skeleton-cover"></div>
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line short"></div>
+        </div>`).join('');
+    hideRecentHint();
+    if(recentStatus) recentStatus.hidden = true;
+}
+
+function renderRecentError(){
+    if(!recentGrid || !recentStatus) return;
+    recentGrid.innerHTML = '';
+    hideRecentHint();
+    recentStatus.hidden = false;
+}
+
 function renderRecent(){
     if(!currentUser) {
-        recentGrid.innerHTML = `<button class="project-card new" type="button" data-auth-login>
-            <div class="project-preview"><span class="plus">+</span></div>
-            <div class="project-meta"><p class="project-name">${L('邮箱登录后开始','Sign in with email')}</p><p class="project-sub">${L('登录后项目会按用户隔离保存','Projects are private after sign-in')}</p></div>
-        </button>`;
+        recentGrid.innerHTML = newProjectCardHtml({auth:true});
         recentGrid.querySelector('[data-auth-login]')?.addEventListener('click', openEmailLogin);
+        showRecentHint(L('登录后创建你的第一个项目','Sign in to start your first project'));
+        if(recentStatus) recentStatus.hidden = true;
         refreshIcons();
         return;
     }
@@ -932,38 +1081,21 @@ function renderRecent(){
         })
         .slice(0, 8);
     const cards = [
-        `<button class="project-card new" type="button" data-new-canvas>
-            <div class="project-preview"><span class="plus">+</span></div>
-            <div class="project-meta"><p class="project-name">${L('新建项目','New Project')}</p><p class="project-sub">${L('创建空白画布','Create a blank canvas')}</p></div>
-        </button>`,
-        ...recentProjects.map(project => {
-            const latest = latestCanvasInProject(project.id);
-            const count = canvasesInProject(project.id).length;
-            const menuOpen = projectMenuProjectId === project.id;
-            const confirmOpen = pendingDeleteProjectId === project.id;
-            const sub = count
-                ? `${count} ${L('个画布','canvases')} · ${formatTime(latest?.updated_at || latest?.created_at)}`
-                : L('暂无画布，点击后自动创建','No canvas yet; click to create one');
-            return `<div class="project-card" role="button" tabindex="0" data-project-open="${escapeHtml(project.id)}">
-            <button class="project-card-more" type="button" data-project-menu="${escapeHtml(project.id)}" title="${L('项目选项','Project options')}" aria-label="${L('项目选项','Project options')}"><i data-lucide="more-horizontal"></i></button>
-            ${menuOpen ? `<div class="project-options-popover" data-project-popover>
-                <button type="button" class="project-option-item" data-project-rename="${escapeHtml(project.id)}"><i data-lucide="pencil"></i><span>${L('修改名字','Rename')}</span></button>
-                <button type="button" class="project-option-item danger" data-project-delete="${escapeHtml(project.id)}"><i data-lucide="trash-2"></i><span>${L('删除项目','Delete project')}</span></button>
-            </div>` : ''}
-            <div class="project-preview"><i data-lucide="folder-open"></i></div>
-            <div class="project-meta"><p class="project-name">${escapeHtml(project.name || L('未命名项目','Untitled project'))}</p><p class="project-sub">${escapeHtml(sub)}</p></div>
-            ${confirmOpen ? `<div class="project-delete-confirm">
-                <p>${L('删除项目','Delete project')}「${escapeHtml(project.name || '')}」？</p>
-                <div>
-                    <button type="button" class="confirm-danger" data-project-delete-confirm="${escapeHtml(project.id)}">${L('删除','Delete')}</button>
-                    <button type="button" class="confirm-ghost" data-project-delete-cancel>${L('取消','Cancel')}</button>
-                </div>
-            </div>` : ''}
-        </div>`;
-        })
+        newProjectCardHtml(),
+        ...recentProjects.map(project => projectCardHtml(project))
     ];
     recentGrid.innerHTML = cards.join('');
+    hideRecentHint();
+    if(!recentProjects.length) showRecentHint(L('从第一个项目开始你的创作','Start your creation with a new project'));
+    if(recentStatus) recentStatus.hidden = true;
     recentGrid.querySelector('[data-new-canvas]')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
+    recentGrid.querySelectorAll('[data-cover-img]').forEach(img => {
+        img.addEventListener('error', () => {
+            const wrap = img.closest('.cover-media');
+            if(wrap) wrap.outerHTML = placeholderCoverHtml();
+            refreshIcons();
+        });
+    });
     recentGrid.querySelectorAll('[data-project-open]').forEach(card => {
         bindCanvasPrefetch(card, card.dataset.projectOpen || '');
         card.addEventListener('click', event => {
@@ -1029,6 +1161,7 @@ async function loadHomeData(){
         renderRecent();
         return;
     }
+    renderHomeSkeleton();
     try {
         const [projectRes, canvasRes] = await Promise.all([fetch('/api/projects'), fetch('/api/canvases')]);
         if(isAuthError(projectRes) || isAuthError(canvasRes)) {
@@ -1048,7 +1181,7 @@ async function loadHomeData(){
         console.error(err);
         projects = [];
         canvases = [];
-        renderRecent();
+        renderRecentError();
         showStatus(L('项目加载失败，请稍后重试','Failed to load projects'));
     }
 }
@@ -1063,13 +1196,152 @@ function renderLocalHomeData(){
     return true;
 }
 
-document.getElementById('projectQuickCreate')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
-window.addEventListener('wheel', onHomeWheel, {passive:false});
+// ===== 新交互：输入框 / 上传 / 用户菜单 =====
+const homeUploadInput = document.createElement('input');
+homeUploadInput.type = 'file';
+homeUploadInput.multiple = true;
+homeUploadInput.accept = 'image/*,video/*,audio/*';
+homeUploadInput.hidden = true;
+document.body.appendChild(homeUploadInput);
+
+function openHomeFilePicker(){
+    homeUploadInput.click();
+}
+
+function updateUploadStatus(){
+    if(!uploadStatus) return;
+    if(homeAttachedAssets.length){
+        uploadStatus.hidden = false;
+        const count = homeAttachedAssets.length;
+        const first = homeAttachedAssets[0]?.name || '';
+        uploadStatus.textContent = count === 1
+            ? `${L('已上传素材：','Uploaded: ')}${first}`
+            : L('已上传 N 个素材','N files uploaded').replace('N', String(count));
+    } else {
+        uploadStatus.hidden = true;
+    }
+}
+
+async function uploadHomeFiles(files){
+    const list = [...(files || [])].filter(f =>
+        /^(image|video|audio)\//.test(f.type || '') ||
+        /\.(png|jpe?g|webp|gif|bmp|mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name || '')
+    );
+    if(!list.length){
+        showStatus(L('请选择图片、视频或音频文件','Please choose image, video or audio files'));
+        return;
+    }
+    if(uploadStatus){
+        uploadStatus.hidden = false;
+        uploadStatus.textContent = L('正在上传 N 个素材…','Uploading N file(s)...').replace('N', String(list.length));
+    }
+    const form = new FormData();
+    list.forEach(file => form.append('files', file));
+    try {
+        const res = await fetch('/api/local-assets/upload', {method:'POST', body:form, credentials:'same-origin'});
+        if(!res.ok) throw new Error('upload failed');
+        const data = await res.json();
+        const uploaded = (data.files || []).filter(item => item && item.url);
+        homeAttachedAssets = [...homeAttachedAssets, ...uploaded];
+        updateUploadStatus();
+        if(assetLibraryLink) assetLibraryLink.hidden = false;
+        updateStartState();
+        showStatus(L('已上传 N 个素材','N file(s) uploaded').replace('N', String(uploaded.length)));
+    } catch(err){
+        console.error(err);
+        updateUploadStatus();
+        showStatus(L('上传失败，请稍后重试','Upload failed, please retry'));
+    }
+}
+
+function resizePrompt(){
+    if(!promptInput) return;
+    promptInput.style.height = 'auto';
+    const max = 190;
+    promptInput.style.height = Math.min(promptInput.scrollHeight, max) + 'px';
+    promptInput.style.overflowY = promptInput.scrollHeight > max ? 'auto' : 'hidden';
+}
+
+function updateStartState(){
+    if(!startBtn) return;
+    if(startBtn.classList.contains('is-loading')) return;
+    const hasContent = Boolean((promptInput?.value || '').trim() || homeAttachedAssets.length);
+    startBtn.disabled = !hasContent;
+}
+
+let promptDragDepth = 0;
+function setPromptDragging(on){
+    promptForm?.classList.toggle('drag-over', Boolean(on));
+    if(dropHint) dropHint.hidden = !on;
+}
+
+function toggleUserMenu(force){
+    if(!homeUserMenu) return;
+    const willShow = force !== undefined ? force : homeUserMenu.hidden;
+    homeUserMenu.hidden = !willShow;
+    homeUserBox?.setAttribute('aria-expanded', String(willShow));
+}
+
+// ===== 初始化 =====
 promptForm.addEventListener('submit', e => {
     e.preventDefault();
-    startCreativeProject(promptInput.value.trim(), currentMode);
+    startCreativeProject((promptInput?.value || '').trim(), currentMode);
 });
-document.getElementById('attachBtn')?.addEventListener('click', () => openShellPage('asset-manager'));
+promptInput.addEventListener('input', () => {
+    resizePrompt();
+    updateStartState();
+});
+promptInput.addEventListener('keydown', e => {
+    if((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.key === 'NumpadEnter')){
+        e.preventDefault();
+        if(startBtn && !startBtn.disabled) promptForm.requestSubmit();
+    }
+});
+homeUploadInput.addEventListener('change', () => {
+    const files = [...(homeUploadInput.files || [])];
+    homeUploadInput.value = '';
+    if(files.length) uploadHomeFiles(files);
+});
+document.getElementById('attachBtn')?.addEventListener('click', openHomeFilePicker);
+assetLibraryLink?.addEventListener('click', e => {
+    e.preventDefault();
+    openShellPage('asset-manager');
+});
+promptForm?.addEventListener('dragenter', e => {
+    e.preventDefault();
+    promptDragDepth += 1;
+    setPromptDragging(true);
+});
+promptForm?.addEventListener('dragover', e => {
+    e.preventDefault();
+    if(e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+promptForm?.addEventListener('dragleave', e => {
+    e.preventDefault();
+    promptDragDepth = Math.max(0, promptDragDepth - 1);
+    if(promptDragDepth === 0) setPromptDragging(false);
+});
+promptForm?.addEventListener('drop', e => {
+    e.preventDefault();
+    promptDragDepth = 0;
+    setPromptDragging(false);
+    const files = [...(e.dataTransfer?.files || [])];
+    if(files.length) uploadHomeFiles(files);
+});
+homeUserBox?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleUserMenu();
+});
+document.addEventListener('click', e => {
+    if(!e.target.closest('.user-entry')) toggleUserMenu(false);
+});
+document.addEventListener('keydown', e => {
+    if(e.key === 'Escape') toggleUserMenu(false);
+});
+homeThemeBtn?.addEventListener('click', () => { toggleHomeTheme(); toggleUserMenu(false); });
+homeLanguageBtn?.addEventListener('click', () => { toggleHomeLanguage(); toggleUserMenu(false); });
+homeLogoutBtn?.addEventListener('click', () => { logout(); toggleUserMenu(false); });
+recentRetryBtn?.addEventListener('click', () => loadHomeData());
 
 if(window.StudioI18n) StudioI18n.apply();
 applyHomeStaticCopy();
@@ -1087,7 +1359,9 @@ emailLoginModal?.querySelectorAll('[data-close-email-login]').forEach(el => el.a
 loginCodeInput?.addEventListener('input', () => {
     loginCodeInput.value = loginCodeInput.value.replace(/\D/g, '').slice(0, 6);
 });
-homeLogoutBtn?.addEventListener('click', logout);
+renderHomeSkeleton();
+resizePrompt();
+updateStartState();
 loadCurrentUser().then(loadHomeData);
 scheduleHomeWarmup();
 if(initialHomeParams().get('section') === 'projects') focusProjectsSection();

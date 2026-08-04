@@ -3561,9 +3561,109 @@ def canvas_delete_raw(canvas_id):
     if os.path.exists(path):
         os.remove(path)
 
+def media_thumbnail_url(url):
+    """把画布媒体 URL 映射为适合项目卡片尺寸的缩略图地址（不加载原图）。"""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    if text.startswith(("data:", "blob:")):
+        return ""
+    if text.startswith(("/output/", "/assets/", "/api/storage-files/")):
+        return f"/api/media-preview?url={urllib.parse.quote(text, safe='')}&w=512"
+    if text.startswith(("http://", "https://")):
+        if storage_r2.is_configured() and storage_r2.key_from_public_url(text):
+            return f"/api/media-preview?url={urllib.parse.quote(text, safe='')}&w=512"
+        return text
+    return ""
+
+def canvas_latest_visual(canvas):
+    """轻量提取单张画布最近的成功视觉成果，作为项目封面候选。
+
+    只扫描节点顶层结构（generatedOutputs / images / url），不解析日志、不递归
+    深层字段，保证保存路径开销可控。优先级：成功生成的图片 > 成功生成的视频
+    > 成功上传的图片 > 成功上传的视频。返回 None 表示没有可用视觉成果。
+    """
+    try:
+        nodes = canvas.get("nodes")
+        if not isinstance(nodes, list):
+            return None
+    except Exception:
+        return None
+    fallback_time = int(canvas.get("updated_at") or canvas.get("created_at") or 0) or 0
+    best = {}
+    def consider(category, raw, url, order):
+        url = canvas_asset_downloadable_url(url)
+        if not url:
+            return
+        extra = raw if isinstance(raw, dict) else {}
+        try:
+            ts = int(extra.get("created_at") or fallback_time) or 0
+        except (TypeError, ValueError):
+            ts = fallback_time
+        current = best.get(category)
+        if current is None or ts > current[1] or (ts == current[1] and order > current[2]):
+            best[category] = (url, ts, order, extra)
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("type") or "")
+        order = 0
+        for out in (node.get("generatedOutputs") or []):
+            url = canvas_asset_url_value(out)
+            kind = canvas_asset_kind(out, url)
+            if kind == "video":
+                consider("generated_video", out, url, order)
+            elif kind == "image":
+                consider("generated_image", out, url, order)
+            order += 1
+        if node_type == "output":
+            for img in (node.get("images") or []):
+                consider("generated_image", img, canvas_asset_url_value(img), order)
+                order += 1
+        else:
+            for img in (node.get("images") or []):
+                consider("upload_image", img, canvas_asset_url_value(img), order)
+                order += 1
+            node_url = canvas_asset_url_value(node.get("url"))
+            if node_url:
+                kind = canvas_asset_kind(node, node_url)
+                if kind == "video":
+                    consider("upload_video", node, node_url, order)
+                elif kind == "image":
+                    consider("upload_image", node, node_url, order)
+    for category, media_type in (
+        ("generated_image", "image"),
+        ("generated_video", "video"),
+        ("upload_image", "image"),
+        ("upload_video", "video"),
+    ):
+        entry = best.get(category)
+        if not entry:
+            continue
+        url, ts, _, extra = entry
+        result = {
+            "type": media_type,
+            "url": url,
+            "thumbnailUrl": media_thumbnail_url(url),
+            "createdAt": ts,
+            "source": "generated" if category.startswith("generated") else "uploaded",
+        }
+        duration = extra.get("duration")
+        if duration is not None:
+            try:
+                result["duration"] = float(duration)
+            except (TypeError, ValueError):
+                pass
+        return result
+    return None
+
 def save_canvas(canvas):
     with CANVAS_LOCK:
         canvas["updated_at"] = max(now_ms(), int(canvas.get("updated_at") or 0) + 1)
+        try:
+            canvas["latest_visual"] = canvas_latest_visual(canvas)
+        except Exception:
+            canvas["latest_visual"] = canvas.get("latest_visual")
         canvas_write_raw(canvas)
 
 def normalize_canvas_kind(kind="classic"):
@@ -3774,13 +3874,24 @@ def new_project(name="新项目", user_id=""):
 def list_projects(user_id=""):
     projects = ensure_default_project(user_id)
     counts = {}
+    visuals = {}
     for rec in iter_canvas_records(include_deleted=False, user_id=user_id):
         pid = rec.get("project") or DEFAULT_PROJECT_ID
         counts[pid] = counts.get(pid, 0) + 1
+        visual = rec.get("latest_visual")
+        if isinstance(visual, dict) and visual.get("thumbnailUrl"):
+            current = visuals.get(pid)
+            try:
+                ts = int(visual.get("createdAt") or 0) or 0
+            except (TypeError, ValueError):
+                ts = 0
+            if current is None or ts > (int(current.get("createdAt") or 0) or 0):
+                visuals[pid] = visual
     out = []
     for p in sorted(projects, key=lambda x: (int(x.get("order") or 0), x.get("created_at") or 0)):
         rec = project_record(p)
         rec["canvas_count"] = counts.get(rec["id"], 0)
+        rec["latestVisualAsset"] = visuals.get(rec["id"])
         out.append(rec)
     return out
 
@@ -3865,7 +3976,7 @@ def iter_canvas_records(include_deleted=False, user_id=""):
     if storage_db.is_configured():
         meta_rows = storage_db.kv_list_meta(
             "canvases",
-            ("id", "title", "icon", "kind", "owner", "color", "pinned", "project", "board_x", "board_y", "created_at", "updated_at", "deleted_at", "user_id"),
+            ("id", "title", "icon", "kind", "owner", "color", "pinned", "project", "board_x", "board_y", "created_at", "updated_at", "deleted_at", "user_id", "latest_visual"),
         )
         if meta_rows is not None:
             records = []
@@ -3876,7 +3987,7 @@ def iter_canvas_records(include_deleted=False, user_id=""):
                 if include_deleted != is_deleted:
                     continue
                 try:
-                    records.append(canvas_record({
+                    rec = canvas_record({
                         "id": row.get("id") or "",
                         "title": row.get("title") or "未命名画布",
                         "icon": row.get("icon") or "🧩",
@@ -3891,7 +4002,9 @@ def iter_canvas_records(include_deleted=False, user_id=""):
                         "updated_at": int(row.get("updated_at") or 0),
                         "deleted_at": int(row.get("deleted_at") or 0),
                         "nodes": [None] * int(row.get("node_count") or 0),
-                    }))
+                    })
+                    rec["latest_visual"] = _meta_json(row.get("latest_visual"))
+                    records.append(rec)
                 except Exception:
                     continue
             return sorted(
@@ -3906,7 +4019,9 @@ def iter_canvas_records(include_deleted=False, user_id=""):
         is_deleted = bool(data.get("deleted_at"))
         if include_deleted != is_deleted:
             continue
-        records.append(canvas_record(data))
+        rec = canvas_record(data)
+        rec["latest_visual"] = data.get("latest_visual")
+        records.append(rec)
     return records
 
 
@@ -3916,6 +4031,17 @@ def _meta_float(value):
             return None
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+def _meta_json(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
         return None
 
 def list_canvases(user_id=""):

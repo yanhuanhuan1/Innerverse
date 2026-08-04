@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN" data-studio-scale="off">
 <head>
     <meta charset="UTF-8">
@@ -19,43 +19,67 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/theme.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/i18n.js?v=2026.07.23.1785744093"></script>
-    <link rel="stylesheet" href="/static/css/home.css?v=2026.07.23.1785742727">
+    <link rel="stylesheet" href="/static/css/home.css?v=2026.07.23.1785828296">
 </head>
 <body>
-    <main class="home-shell">
-        <header class="home-status">
-            <button id="emailLoginBtn" class="home-pill-btn auth-login" type="button" title="登录" aria-label="登录" hidden><i data-lucide="mail"></i><span>登录</span></button>
-            <div id="homeUserBox" class="home-user-box" hidden>
-                <img id="homeUserAvatar" alt="" />
-                <span id="homeUserName">用户</span>
-                <button id="homeLogoutBtn" type="button" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
+    <div class="home-page">
+        <header class="home-topbar">
+            <div class="topbar-actions">
+                <button id="emailLoginBtn" class="auth-login" type="button" title="登录" aria-label="登录" hidden><i data-lucide="mail"></i><span>登录</span></button>
+                <div class="user-entry">
+                    <button id="homeUserBox" class="user-chip" type="button" aria-haspopup="menu" aria-expanded="false" hidden>
+                        <img id="homeUserAvatar" alt="" />
+                        <span id="homeUserName">用户</span>
+                        <i data-lucide="chevron-down" class="user-chevron"></i>
+                    </button>
+                    <div id="homeUserMenu" class="user-menu" hidden>
+                        <button id="homeThemeBtn" class="user-menu-item" type="button" title="切换主题" aria-label="切换主题"><i data-lucide="moon"></i><span>切换主题</span></button>
+                        <button id="homeLanguageBtn" class="user-menu-item" type="button" title="切换语言" aria-label="切换语言"><i data-lucide="languages"></i><span>中文</span></button>
+                        <div class="user-menu-sep"></div>
+                        <button id="homeLogoutBtn" class="user-menu-item danger" type="button" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i><span>退出登录</span></button>
+                    </div>
+                </div>
             </div>
-            <button id="homeThemeBtn" class="home-icon-btn" type="button" onclick="toggleHomeTheme()" title="切换主题" aria-label="切换主题"><i data-lucide="moon"></i></button>
-            <button id="homeLanguageBtn" class="home-pill-btn" type="button" onclick="toggleHomeLanguage()" title="切换语言" aria-label="切换语言"><i data-lucide="languages"></i><span>中文</span></button>
         </header>
 
-        <section class="hero">
-            <p class="hero-kicker">方寸万象</p>
-
-            <form id="promptForm" class="prompt-card">
-                <textarea id="homePrompt" rows="4" placeholder="描述你的创作需求……"></textarea>
-                <div class="prompt-actions">
-                    <button id="attachBtn" class="ghost-action" type="button"><i data-lucide="paperclip"></i><span>从素材开始</span></button>
-                    <button id="startBtn" class="start-btn" type="submit"><span>开始创作</span><i data-lucide="arrow-up-right"></i></button>
+        <main class="home-main">
+            <section class="home-hero">
+                <div class="brand-head">
+                    <span class="brand-mark" aria-hidden="true"></span>
+                    <h1 class="hero-title">方寸万象</h1>
                 </div>
-            </form>
-        </section>
+                <p class="hero-sub">你的智能创作助手，帮你完成从灵感到视觉成果</p>
 
-        <section class="recent-section" id="recentSection">
-            <div class="section-head">
-                <button class="section-title-btn" type="button" id="recentTitleBtn">
-                    <h2>项目</h2>
-                    <p>所有项目都在这里，点击项目直接进入画布。</p>
-                </button>
-                <button id="projectQuickCreate" class="project-primary-btn" type="button"><i data-lucide="plus"></i><span>新建项目</span></button>
-            </div>
-            <div id="recentGrid" class="recent-grid"></div>
-        </section>
+                <form id="promptForm" class="prompt-card" novalidate>
+                    <textarea id="homePrompt" rows="2" placeholder="描述你想创作的内容，或将图片和文件拖到这里"></textarea>
+                    <div class="prompt-actions">
+                        <div class="prompt-left">
+                            <button id="attachBtn" class="ghost-action" type="button"><i data-lucide="paperclip"></i><span>上传素材</span></button>
+                            <a id="assetLibraryLink" class="asset-library-link" href="/static/asset-manager.html?v=2026.07.23.1785828569" hidden>素材库</a>
+                        </div>
+                        <div class="prompt-right">
+                            <span id="uploadStatus" class="upload-status" hidden></span>
+                            <button id="startBtn" class="start-btn" type="submit"><span>使用 AI 创建</span><i data-lucide="arrow-up-right"></i></button>
+                        </div>
+                    </div>
+                    <div id="dropHint" class="drop-hint" role="status" hidden>松开以上传素材</div>
+                </form>
+
+                <div id="quickTags" class="quick-tags" role="group" aria-label="快捷创作"></div>
+            </section>
+
+            <section class="recent-section" id="recentSection" aria-labelledby="recentHeading">
+                <div class="section-head">
+                    <h2 id="recentHeading">最近项目</h2>
+                </div>
+                <div id="recentGrid" class="recent-grid"></div>
+                <div id="recentEmpty" class="recent-empty" hidden></div>
+                <div id="recentStatus" class="recent-status" hidden>
+                    <p id="recentErrorText">项目加载失败</p>
+                    <button id="recentRetryBtn" type="button">重新加载</button>
+                </div>
+            </section>
+        </main>
 
         <div id="homeStatus" class="home-toast"></div>
         <div id="emailLoginModal" class="auth-modal" hidden>
@@ -92,7 +116,7 @@
                 <div id="emailLoginHint" class="auth-hint"></div>
             </form>
         </div>
-    </main>
-    <script src="/static/js/home.js?v=2026.08.04.perf2"></script>
+    </div>
+    <script src="/static/js/home.js?v=2026.07.23.1785828394"></script>
 </body>
 </html>
