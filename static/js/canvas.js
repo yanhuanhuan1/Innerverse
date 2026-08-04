@@ -32,6 +32,10 @@ function canvasFileNameFromUrl(url=''){
         return decodeURIComponent(String(url || '').split('?')[0].split('#')[0].split('/').filter(Boolean).pop() || '');
     }
 }
+let canvasR2PublicBase = '';
+function r2PublicBase(){
+    return canvasR2PublicBase || '';
+}
 function canvasProxiedMediaUrl(url, name=''){
     const raw = canvasOriginalMediaUrl(url);
     if(!raw || raw.startsWith('/assets/') || raw.startsWith('/output/') || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
@@ -41,22 +45,30 @@ function canvasProxiedMediaUrl(url, name=''){
 }
 function canvasDisplayMediaUrl(url, name=''){
     const raw = canvasOriginalMediaUrl(url);
+    const base = r2PublicBase();
+    // R2 公共资源走 CDN 直链，不再经后端代理转发整份文件。
+    if(base && raw.startsWith(base + '/')) return raw;
     return /^https?:\/\//i.test(raw) ? canvasProxiedMediaUrl(raw, name) : raw;
 }
 function canvasMediaPreviewUrl(url, size=512){
     const raw = canvasOriginalMediaUrl(url);
     if(!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
-    if(!raw.startsWith('/output/') && !raw.startsWith('/assets/')) return canvasDisplayMediaUrl(raw);
-    if(!/\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|avi|mkv|flv)(\?|#|$)/i.test(raw)) return raw;
+    const base = r2PublicBase();
+    const isLocal = raw.startsWith('/output/') || raw.startsWith('/assets/');
+    const isR2 = base && raw.startsWith(base + '/');
+    if(!isLocal && !isR2) return canvasDisplayMediaUrl(raw);
     const width = Math.max(64, Math.min(2048, Math.round(Number(size) || 512)));
     return `/api/media-preview?w=${width}&url=${encodeURIComponent(raw)}`;
 }
 function canvasPreviewImgHtml(url, size=512, attrs=''){
     const original = canvasOriginalMediaUrl(url);
     const preview = canvasMediaPreviewUrl(original, size);
+    const srcset = [256, 512, 768, 1024]
+        .map(w => `${canvasMediaPreviewUrl(original, w)} ${w}w`)
+        .join(', ');
     // loading=lazy：画布内容多时，视口外的缩略图不加载/不解码，避免一次性解码上百张图卡顿；
     // decoding=async：解码放到主线程外，渲染时不阻塞。
-    return `<img loading="lazy" decoding="async" src="${escapeAttr(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" data-url="${escapeAttr(original)}"${attrs ? ` ${attrs}` : ''}>`;
+    return `<img loading="lazy" decoding="async" src="${escapeAttr(preview)}" srcset="${escapeAttr(srcset)}" sizes="(max-width: 768px) 45vw, 320px" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" data-url="${escapeAttr(original)}"${attrs ? ` ${attrs}` : ''}>`;
 }
 function loadCanvasOriginalImageDimensions(url){
     const src = String(url || '');
@@ -125,7 +137,19 @@ function bindCanvasPreviewImageFallbacks(root=document){
                 img.replaceWith(video.content.firstElementChild);
                 return;
             }
-            if(original && img.getAttribute('src') !== original) img.src = original;
+            // 缩略图失败时回退到原图一次；原图也失败则显示占位，不阻塞画布。
+            if(original && img.getAttribute('src') !== original){
+                img.src = original;
+                return;
+            }
+            if(!img.closest('.output-img-wrap')){
+                const fallback = document.createElement('div');
+                fallback.className = 'missing-asset compact';
+                fallback.title = original || '';
+                fallback.innerHTML = `<i data-lucide="image-off" class="w-4 h-4"></i>`;
+                img.replaceWith(fallback);
+                refreshIcons();
+            }
         });
     });
 }
@@ -1310,6 +1334,29 @@ function setStatus(text){
     document.getElementById('saveState').textContent = text;
     if(gateStatus) gateStatus.textContent = text;
 }
+function markPerf(name){
+    try {
+        window.__perfMarks = window.__perfMarks || [];
+        window.__perfMarks.push({name, t: Math.round(performance.now())});
+        if(window.performance && performance.mark) performance.mark(`canvas:${name}`);
+    } catch(e) {}
+}
+function reportPerf(){
+    try {
+        if(window.__perfReported) return;
+        window.__perfReported = true;
+        const marks = window.__perfMarks || [];
+        const body = JSON.stringify({route: 'canvas', marks});
+        if(navigator.sendBeacon) navigator.sendBeacon('/api/perf', new Blob([body], {type:'application/json'}));
+    } catch(e) {}
+}
+function hideCanvasBoot(){
+    const boot = document.getElementById('canvasBoot');
+    if(boot){
+        boot.classList.add('hidden');
+        setTimeout(() => boot.remove(), 400);
+    }
+}
 let generationCompleteSoundAt = 0;
 function playGenerationCompleteSound(){
     const now = Date.now();
@@ -1719,7 +1766,7 @@ async function saveCanvas(){
         nodes:serializableCanvasNodes(),
         connections,
         viewport,
-        logs:canvas.logs || [],
+        logs:canvas.logsLoaded ? (canvas.logs || []) : null,
         client_id:CLIENT_ID,
         base_updated_at:Number(lastCanvasUpdatedAt || canvas.updated_at || 0)
     };
@@ -1777,33 +1824,61 @@ async function saveCanvas(){
     }
 }
 
-async function loadConfig(){
-    loadLocalModelLists();
+const CONFIG_CACHE_KEY = 'canvas_config_cache_v1';
+const CONFIG_CACHE_TTL = 60000;
+function readConfigCache(){
     try {
-        const cfg = await fetch('/api/config').then(r=>r.json());
-        imageModels = cfg.image_models?.length ? cfg.image_models : imageModels;
-        chatModels = cfg.chat_models?.length ? cfg.chat_models : chatModels;
-        videoModels = cfg.video_models?.length ? cfg.video_models : DEFAULT_VIDEO_MODELS;
-        msChatModels = cfg.ms_chat_models?.length ? cfg.ms_chat_models : msChatModels;
-        comfyBackendCount = Math.max(1, (cfg.comfy_instances || []).length || 1);
-        apiProviders = Array.isArray(cfg.api_providers) && cfg.api_providers.length ? cfg.api_providers : defaultApiProviders();
+        const raw = sessionStorage.getItem(CONFIG_CACHE_KEY);
+        if(!raw) return null;
+        const parsed = JSON.parse(raw);
+        if(parsed && parsed.t && Date.now() - parsed.t < CONFIG_CACHE_TTL) return parsed;
+    } catch(e) {}
+    return null;
+}
+function writeConfigCache(data){
+    try { sessionStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify({t: Date.now(), data})); } catch(e) {}
+}
+async function loadConfig(force=false){
+    markPerf('config_start');
+    loadLocalModelLists();
+    const cached = !force ? readConfigCache() : null;
+    try {
+        const cfgPromise = fetch('/api/config').then(r => r.json());
+        const wfPromise = fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows: []}));
+        const [cfg, wf] = await Promise.all([cfgPromise, wfPromise]);
+        const effective = cached?.data || {};
+        Object.assign(effective, cfg);
+        imageModels = effective.image_models?.length ? effective.image_models : imageModels;
+        chatModels = effective.chat_models?.length ? effective.chat_models : chatModels;
+        videoModels = effective.video_models?.length ? effective.video_models : DEFAULT_VIDEO_MODELS;
+        msChatModels = effective.ms_chat_models?.length ? effective.ms_chat_models : msChatModels;
+        comfyBackendCount = Math.max(1, (effective.comfy_instances || []).length || 1);
+        apiProviders = Array.isArray(effective.api_providers) && effective.api_providers.length ? effective.api_providers : defaultApiProviders();
+        canvasR2PublicBase = effective.r2_public_base || '';
         models.nano = imageModels.find(m => m.toLowerCase().includes('nano')) || 'nano-banana-pro';
-        models.gpt = imageModels.find(m => !m.toLowerCase().includes('nano')) || cfg.image_model || 'gpt-image-2';
-        try {
-            const wf = await fetch('/api/workflows').then(r=>r.json());
-            comfyWorkflows = wf.workflows || [];
-        } catch(_) {
-            comfyWorkflows = [];
-        }
+        models.gpt = imageModels.find(m => !m.toLowerCase().includes('nano')) || effective.image_model || 'gpt-image-2';
+        comfyWorkflows = (wf.workflows || []).length ? wf.workflows : (comfyWorkflows || []);
+        writeConfigCache({image_models: imageModels, chat_models: chatModels, video_models: videoModels, ms_chat_models: msChatModels, comfy_instances: effective.comfy_instances, api_providers: apiProviders, r2_public_base: canvasR2PublicBase});
+        // RunningHub workflow 初始化放到后台，不阻塞画布首帧。
         runningHubWorkflowCache = {};
         const rhProvider = apiProviders.find(p => p.id === 'runninghub');
         const rhWorkflowIds = (rhProvider?.rh_workflows || []).map(item => String(item.workflowId || item.id || '').trim()).filter(Boolean);
-        await Promise.all(rhWorkflowIds.map(async workflowId => {
-            try { await ensureRunningHubWorkflow(workflowId); } catch(_) {}
-        }));
+        rhWorkflowIds.forEach(workflowId => {
+            setTimeout(() => { try { ensureRunningHubWorkflow(workflowId); } catch(_) {} }, 0);
+        });
     } catch(e) {
-        apiProviders = defaultApiProviders();
+        if(cached){
+            try {
+                const effective = cached.data || {};
+                imageModels = effective.image_models?.length ? effective.image_models : imageModels;
+                apiProviders = Array.isArray(effective.api_providers) && effective.api_providers.length ? effective.api_providers : defaultApiProviders();
+                canvasR2PublicBase = effective.r2_public_base || '';
+            } catch(_) {}
+        } else {
+            apiProviders = defaultApiProviders();
+        }
     }
+    markPerf('config_loaded');
 }
 
 // 监听 API 设置页面的变更广播，实时刷新画布的模型/平台下拉
@@ -2357,6 +2432,7 @@ async function setCanvasTitle(id, title){
     }
 }
 async function openCanvas(id){
+    markPerf('canvas_api_start');
     setStatus('Opening...');
     try {
         let data = null;
@@ -2378,13 +2454,13 @@ async function openCanvas(id){
         resetCascadeRuntimeState();
         canvas = data.canvas;
         rememberCanvasListProject(canvas.project || 'default');
-        const touched = await touchCanvasOpened(canvas.id);
-        if(touched?.updated_at) canvas.updated_at = Number(touched.updated_at);
+        markPerf('canvas_api_complete');
         if((canvas.kind || 'classic') === 'smart'){
             openSmartCanvasPage(canvas.id);
             return;
         }
         canvas.logs = canvas.logs || [];
+        canvas.logsLoaded = Boolean(data.canvas?.logs && Array.isArray(data.canvas.logs));
         nodes = canvas.nodes || [];
         connections = canvas.connections || [];
         viewport = localViewportForCanvas(canvas.id, canvas.viewport || {x:0, y:0, scale:1});
@@ -2396,15 +2472,27 @@ async function openCanvas(id){
         migrateInlineGeneratedOutputNodes();
         const migratedInlineOutputs = consumeInlineOutputMigrationChanged();
         pruneMissingComfyWorkflows();
-        await refreshMissingCanvasAssets();
         selected.clear();
+        markPerf('canvas_render_start');
         setCanvasMode(true);
         renderCanvasList();
         render();
+        hideCanvasBoot();
+        markPerf('canvas_first_frame');
+        // 非核心初始化全部放到首帧之后，不阻塞画布显示。
+        touchCanvasOpened(canvas.id).then(touched => {
+            if(touched?.updated_at){
+                canvas.updated_at = Number(touched.updated_at);
+                lastCanvasUpdatedAt = Number(canvas.updated_at);
+            }
+        }).catch(() => {});
+        refreshMissingCanvasAssets().finally(() => {});
         consumeInitialCanvasIntent();
         resumeCanvasImageTasks();
         startCanvasRemotePolling();
         setStatus('Ready');
+        markPerf('canvas_ready');
+        reportPerf();
         if(migratedInlineOutputs) scheduleSave();
     } catch(e) {
         setStatus(tr('canvas.openFailed'));
@@ -2425,8 +2513,11 @@ function applyRemoteCanvasData(remote){
         resetCascadeRuntimeState();
         const localViewport = localViewportForCanvas(canvas.id, viewport || remote.viewport || {x:0, y:0, scale:1});
         const localSelectedIds = new Set(selected);
+        const localLogs = canvas.logs || [];
+        const localLogsLoaded = canvas.logsLoaded;
         canvas = remote;
-        canvas.logs = canvas.logs || [];
+        canvas.logs = localLogs;
+        canvas.logsLoaded = localLogsLoaded;
         nodes = canvas.nodes || [];
         connections = canvas.connections || [];
         viewport = localViewport;
@@ -2438,7 +2529,7 @@ function applyRemoteCanvasData(remote){
         migrateInlineGeneratedOutputNodes();
         consumeInlineOutputMigrationChanged();
         pruneMissingComfyWorkflows();
-        refreshMissingCanvasAssets().then(() => render());
+        refreshMissingCanvasAssets();
         selected = new Set([...localSelectedIds].filter(id => nodes.some(node => node.id === id)));
         renderCanvasList();
         render();
@@ -2483,21 +2574,76 @@ function canvasLocalAssetUrls(){
     });
     return [...urls];
 }
+const ASSET_CHECK_CACHE_KEY = 'canvas_asset_check_cache_v1';
+const ASSET_CHECK_CACHE_TTL = 60000;
+function readAssetCheckCache(){
+    try {
+        const raw = sessionStorage.getItem(ASSET_CHECK_CACHE_KEY);
+        return raw ? (JSON.parse(raw) || {}) : {};
+    } catch(e) { return {}; }
+}
+function writeAssetCheckCache(cache){
+    try { sessionStorage.setItem(ASSET_CHECK_CACHE_KEY, JSON.stringify(cache)); } catch(e) {}
+}
+function assetCheckCacheFresh(cache, url, now){
+    return Boolean(cache[url] && now - cache[url].t < ASSET_CHECK_CACHE_TTL);
+}
+function affectedNodeIdsForUrls(urls){
+    const urlSet = new Set(urls || []);
+    const ids = new Set();
+    nodes.forEach(node => {
+        if(node.type === 'output') return;
+        const add = value => {
+            const u = outputUrlValue(value);
+            if(u && urlSet.has(u)) ids.add(node.id);
+        };
+        if(node.url) add(node.url);
+        (node.images || []).forEach(add);
+        (node.generatedOutputs || []).forEach(add);
+        Object.keys(node.imageComparisons || {}).forEach(add);
+    });
+    (canvas?.logs || []).forEach(log => {
+        (log.outputs || []).forEach(u => { if(urlSet.has(u)) ids.add(''); });
+    });
+    return [...ids].filter(Boolean);
+}
 async function refreshMissingCanvasAssets(){
+    markPerf('asset_check_start');
+    const cache = readAssetCheckCache();
+    const now = Date.now();
     missingAssetUrls.clear();
     const urls = canvasLocalAssetUrls();
-    if(!urls.length) return;
-    try {
-        const data = await fetch('/api/canvas-assets/check', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({urls})
-        }).then(r => r.json());
-        const exists = data.exists || {};
-        Object.entries(exists).forEach(([url, ok]) => { if(!ok) missingAssetUrls.add(url); });
-    } catch(e) {
-        console.warn('canvas asset check failed', e);
+    if(!urls.length){ markPerf('asset_check_done'); return; }
+    // 先用会话内缓存填充首帧结果（避免热开时闪烁），只检查新资源。
+    const todo = [];
+    urls.forEach(url => {
+        if(assetCheckCacheFresh(cache, url, now)){
+            if(!cache[url].ok) missingAssetUrls.add(url);
+        } else {
+            todo.push(url);
+        }
+    });
+    if(todo.length){
+        try {
+            const data = await fetch('/api/canvas-assets/check', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({urls: todo})
+            }).then(r => r.json());
+            const exists = data.exists || {};
+            Object.entries(exists).forEach(([url, ok]) => {
+                cache[url] = {t: Date.now(), ok: Boolean(ok)};
+                if(!ok) missingAssetUrls.add(url);
+            });
+            writeAssetCheckCache(cache);
+            // 资产检查失败不得阻止画布显示；完成后只刷新受影响节点。
+            const affected = affectedNodeIdsForUrls(Object.keys(exists));
+            if(affected.length) refreshNodes(affected);
+        } catch(e) {
+            console.warn('canvas asset check failed', e);
+        }
     }
+    markPerf('asset_check_done');
 }
 async function syncRemoteCanvasNow(){
     if(!canvas) return;
@@ -2532,15 +2678,29 @@ async function checkRemoteCanvasVersion(){
         remoteSyncBusy = false;
     }
 }
+let remotePollTimer = null;
+let remotePollIntervalMs = 2500;
+function nextRemotePollInterval(){
+    if(document.hidden) return 15000;
+    const busy = localCanvasDirty || nodes.some(n => (n._pending || []).length);
+    return busy ? 2500 : 12000;
+}
+function scheduleRemotePoll(){
+    clearTimeout(remotePollTimer);
+    remotePollTimer = setTimeout(async () => {
+        await checkRemoteCanvasVersion();
+        if(remotePollIntervalMs > 0) scheduleRemotePoll();
+    }, nextRemotePollInterval());
+}
 function startCanvasRemotePolling(){
     stopCanvasRemotePolling();
-    remoteSyncInterval = setInterval(checkRemoteCanvasVersion, 2500);
+    remotePollIntervalMs = 2500;
+    scheduleRemotePoll();
 }
 function stopCanvasRemotePolling(){
-    if(remoteSyncInterval){
-        clearInterval(remoteSyncInterval);
-        remoteSyncInterval = null;
-    }
+    clearTimeout(remotePollTimer);
+    remotePollTimer = null;
+    remotePollIntervalMs = 0;
 }
 function handleCanvasUpdatedMessage(data){
     if(!canvas || !data || data.type !== 'canvas_updated') return;
@@ -4359,7 +4519,11 @@ async function uploadMediaFiles(files, point, onlyImages=false, opts={}){
             y:base.y + i * 36,
             url:file.url,
             name:file.name,
-            mediaKind:kind
+            mediaKind:kind,
+            w:Number(file.width) || 0,
+            h:Number(file.height) || 0,
+            fileSize:Number(file.size) || 0,
+            format:file.format || ''
         };
         nodes.push(node);
         created.push(node);
@@ -6252,17 +6416,18 @@ function measureCanvasOriginalImageNodes(root=nodesEl){
         if(imgEl.dataset.previewKind === 'video') return;
         const nodeEl = imgEl.closest('.image-node');
         const node = nodes.find(n => n.id === nodeEl?.dataset.id);
-        if(!node || node.type !== 'image' || !node.url || node.natural_w || node.natural_h || node._naturalSizeLoading) return;
-        const original = imgEl.dataset.originalSrc || node.url;
-        if(!original) return;
+        if(!node || node.type !== 'image' || node.natural_w || node.natural_h || node.w || node.h || node._naturalSizeLoading) return;
+        if(!imgEl.complete || !imgEl.naturalWidth) return;
+        // 直接用已加载的预览图尺寸（缩略图保持宽高比），不再 new Image() 拉取原图测量。
         node._naturalSizeLoading = true;
-        loadCanvasOriginalImageDimensions(original).then(size => {
-            node._naturalSizeLoading = false;
-            if(!size || node.natural_w || node.natural_h) return;
-            node.natural_w = size.w;
-            node.natural_h = size.h;
-            scheduleSave();
-        });
+        const width = imgEl.naturalWidth;
+        const height = imgEl.naturalHeight;
+        node._naturalSizeLoading = false;
+        if(!width || !height || node.natural_w || node.natural_h) return;
+        node.natural_w = width;
+        node.natural_h = height;
+        if(nodeEl) nodeEl.style.aspectRatio = `${width} / ${height}`;
+        scheduleSave();
     });
 }
 
@@ -6547,7 +6712,13 @@ function renderNode(node){
             const missing = isMissingAssetUrl(node.url);
             const mediaKind = mediaKindForNode(node);
             const isEditableImage = mediaKind === 'image' && !missing;
-            body.innerHTML = `<div class="image-preview-wrap">${missing ? missingAssetHtml(node.url) : canvasPreviewImgHtml(node.url, 768, 'draggable="false"')}</div><div class="image-caption text-[11px] text-gray-400 truncate">${escapeHtml(node.name || '')}${missing ? ` · ${langIsEn() ? 'missing' : '文件缺失'}` : ''}</div>`;
+            // 有上传/生成元数据时直接按宽高比渲染，避免等原图加载再量尺寸。
+            const ratioStyle = (Number(node.natural_w) > 0 && Number(node.natural_h) > 0)
+                ? ` style="aspect-ratio:${Number(node.natural_w)} / ${Number(node.natural_h)}"`
+                : (Number(node.w) > 0 && Number(node.h) > 0)
+                    ? ` style="aspect-ratio:${Number(node.w)} / ${Number(node.h)}"`
+                    : '';
+            body.innerHTML = `<div class="image-preview-wrap"${ratioStyle}>${missing ? missingAssetHtml(node.url) : canvasPreviewImgHtml(node.url, 768, 'draggable="false"')}</div><div class="image-caption text-[11px] text-gray-400 truncate">${escapeHtml(node.name || '')}${missing ? ` · ${langIsEn() ? 'missing' : '文件缺失'}` : ''}</div>`;
             if(!missing && mediaKind !== 'image'){
                 const mediaHtml = mediaKind === 'video'
                     ? `<div class="media-card video-card">${canvasVideoPreviewHtml(node.url, 768, 'draggable="false" data-video-fallback-attrs="controls"')}<button class="canvas-video-play" type="button" title="播放"><i data-lucide="play"></i></button></div>`
@@ -13680,6 +13851,21 @@ function addGenerationLog({run, outputs=[], runMs=0, error=''}) {
         error:error ? String(error) : '',
     };
     canvas.logs = [entry, ...canvas.logs].slice(0, 500);
+    canvas.logsLoaded = true;
+}
+async function ensureCanvasLogsLoaded(){
+    if(!canvas || canvas.logsLoaded) return;
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(canvas.id)}/logs?limit=500&offset=0`);
+        if(!res.ok) return;
+        const data = await res.json();
+        if(Array.isArray(data.logs)){
+            canvas.logs = data.logs.slice(0, 500);
+            canvas.logsLoaded = true;
+        }
+    } catch(e) {
+        console.warn('load canvas logs failed', e);
+    }
 }
 function renderCanvasLog(){
     const list = document.getElementById('logList') || (typeof logList !== 'undefined' ? logList : null);
@@ -13781,13 +13967,15 @@ function openCanvasLog(event){
     const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
     const list = document.getElementById('logList') || (typeof logList !== 'undefined' ? logList : null);
     modal?.classList.add('open');
-    if(list && !list.innerHTML) list.innerHTML = `<div class="log-empty">${tr('canvas.noLogs')}</div>`;
-    try {
-        renderCanvasLog();
-    } catch(err) {
-        console.error('renderCanvasLog failed', err);
-        if(list) list.innerHTML = `<div class="log-empty">${escapeHtml(err?.message || String(err))}</div>`;
-    }
+    ensureCanvasLogsLoaded().finally(() => {
+        if(list && !list.innerHTML) list.innerHTML = `<div class="log-empty">${tr('canvas.noLogs')}</div>`;
+        try {
+            renderCanvasLog();
+        } catch(err) {
+            console.error('renderCanvasLog failed', err);
+            if(list) list.innerHTML = `<div class="log-empty">${escapeHtml(err?.message || String(err))}</div>`;
+        }
+    });
 }
 function closeCanvasLog(){
     const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
@@ -16596,6 +16784,7 @@ function escapeHtml(str){ return String(str == null ? '' : str).replace(/[&<>"']
 function escapeAttr(str){ return escapeHtml(str); }
 
 window.onload = async () => {
+    markPerf('document_loaded');
     localStorage.setItem(CANVAS_THEME_KEY, 'dark');
     localStorage.setItem(CANVAS_DARK_DEFAULT_MIGRATED_KEY, '1');
     applyTheme('dark');

@@ -222,6 +222,38 @@ def kv_list(collection: str) -> List[Dict[str, Any]]:
             return []
 
 
+def kv_list_meta(collection: str, fields: tuple) -> Optional[List[Dict[str, Any]]]:
+    """轻量列出集合文档的指定 JSONB 字段，避免把整张画布 JSON 传到应用层。
+
+    返回 None 表示数据库不可用（调用方回退到 kv_list 全量读取）。
+    """
+    if not fields:
+        return None
+    with _lock:
+        conn = _connect()
+        if not conn or not _ensure_schema(conn):
+            return None
+        try:
+            select = ", ".join(f"data->>'{f}' AS {f}" for f in fields)
+            cur = conn.execute(
+                f"SELECT {select}, jsonb_array_length(COALESCE(data->'nodes', '[]'::jsonb)) AS node_count "
+                "FROM kv_documents WHERE collection = %s ORDER BY (data->>'updated_at')::bigint DESC",
+                (collection,),
+            )
+            rows = cur.fetchall()
+            result = []
+            for row in rows:
+                item = {}
+                for idx, field in enumerate(fields):
+                    item[field] = row[idx]
+                item["node_count"] = row[len(fields)]
+                result.append(item)
+            return result
+        except Exception as exc:
+            logger.info(f"[storage_db] kv_list_meta failed ({collection}): {exc}")
+            return None
+
+
 def _json_payload(data: Dict[str, Any]) -> str:
     return json.dumps(data or {}, ensure_ascii=False, default=str)
 

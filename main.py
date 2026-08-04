@@ -39,6 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import storage_r2
 import storage_db
 
@@ -89,6 +90,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+class ServerTiming:
+    """收集后端阶段耗时，输出为 Server-Timing 响应头，供浏览器 PerformanceServerTiming 读取。"""
+
+    def __init__(self):
+        self.parts = []
+        self._last = time.perf_counter()
+
+    def mark(self, name, dur=None, desc=""):
+        if dur is None:
+            dur = (time.perf_counter() - self._last) * 1000.0
+        token = f"{name};dur={dur:.1f}"
+        if desc:
+            token += f';desc="{str(desc)[:60]}"'
+        self.parts.append(token)
+        self._last = time.perf_counter()
+
+    def header(self):
+        return ", ".join(self.parts) if self.parts else ""
 
 # --- WebSocket 状态管理器 ---
 class ConnectionManager:
@@ -1676,6 +1698,27 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
+
+@app.middleware("http")
+async def static_cache_headers(request: Request, call_next):
+    """静态资源缓存策略：
+    - /static 下带 ?v= 版本号的资源可长期缓存（immutable）；
+    - 媒体文件 /assets、/output 允许浏览器缓存；
+    - 其余响应保持原样。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    try:
+        if path.startswith("/static/") and "v=" in request.url.query:
+            response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        elif path.startswith(("/assets/", "/output/")):
+            response.headers.setdefault("Cache-Control", "public, max-age=86400")
+            # 二进制媒体不做 gzip 缓冲（避免大文件/视频被整体读进内存并破坏 Range 请求）
+            response.headers.setdefault("Content-Encoding", "identity")
+    except Exception:
+        pass
+    return response
+
 # --- Pydantic 模型 ---
 
 def current_app_version():
@@ -2998,7 +3041,7 @@ class CanvasSaveRequest(BaseModel):
     nodes: List[Dict[str, Any]] = []
     connections: List[Dict[str, Any]] = []
     viewport: Dict[str, Any] = {}
-    logs: List[Dict[str, Any]] = []
+    logs: Optional[List[Dict[str, Any]]] = None
     settings: Dict[str, Any] = {}
     client_id: str = ""
     base_updated_at: int = 0
@@ -3804,6 +3847,45 @@ def cleanup_expired_canvas_trash(user_id=""):
 
 def iter_canvas_records(include_deleted=False, user_id=""):
     cleanup_expired_canvas_trash(user_id)
+    if storage_db.is_configured():
+        meta_rows = storage_db.kv_list_meta(
+            "canvases",
+            ("id", "title", "icon", "kind", "owner", "color", "pinned", "project", "board_x", "board_y", "created_at", "updated_at", "deleted_at", "user_id"),
+        )
+        if meta_rows is not None:
+            records = []
+            for row in meta_rows:
+                if not canvas_belongs_to_user(row, user_id):
+                    continue
+                is_deleted = bool(int(row.get("deleted_at") or 0))
+                if include_deleted != is_deleted:
+                    continue
+                try:
+                    records.append(canvas_record({
+                        "id": row.get("id") or "",
+                        "title": row.get("title") or "未命名画布",
+                        "icon": row.get("icon") or "🧩",
+                        "kind": row.get("kind") or "classic",
+                        "owner": row.get("owner") or "",
+                        "color": row.get("color") or "",
+                        "pinned": str(row.get("pinned") or "").lower() == "true",
+                        "project": row.get("project") or DEFAULT_PROJECT_ID,
+                        "board_x": _meta_float(row.get("board_x")),
+                        "board_y": _meta_float(row.get("board_y")),
+                        "created_at": int(row.get("created_at") or 0),
+                        "updated_at": int(row.get("updated_at") or 0),
+                        "deleted_at": int(row.get("deleted_at") or 0),
+                        "nodes": [None] * int(row.get("node_count") or 0),
+                    }))
+                except Exception:
+                    continue
+            return sorted(
+                records,
+                key=lambda item: (
+                    0 if item.get("pinned") else 1,
+                    -int(item.get("updated_at") or item.get("created_at") or 0),
+                ),
+            )
     records = []
     for data in iter_all_canvas_data(user_id):
         is_deleted = bool(data.get("deleted_at"))
@@ -3811,6 +3893,15 @@ def iter_canvas_records(include_deleted=False, user_id=""):
             continue
         records.append(canvas_record(data))
     return records
+
+
+def _meta_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 def list_canvases(user_id=""):
     records = iter_canvas_records(include_deleted=False, user_id=user_id)
@@ -6888,6 +6979,69 @@ def output_file_from_url(url):
             return path
     return None
 
+
+def canvas_asset_url_to_local_path(url):
+    """把画布媒体 URL 映射为本地路径（只做路径映射，不回源 R2）。"""
+    clean = urllib.parse.unquote(str(url or "").split("?", 1)[0]).replace("\\", "/")
+    try:
+        if clean.startswith("/api/storage-files/"):
+            rest = clean[len("/api/storage-files/"):].lstrip("/")
+            kind, _, rel = rest.partition("/")
+            if not kind or not rel:
+                return None
+            root = storage_kind_dir(kind)
+            rel_path = os.path.normpath(rel).replace("\\", "/")
+            if rel_path.startswith("../") or os.path.isabs(rel_path):
+                return None
+            path = os.path.abspath(os.path.join(root, rel_path))
+            return path if os.path.commonpath([os.path.abspath(root), path]) == os.path.abspath(root) else None
+        if clean.startswith("/assets/"):
+            rel = clean[len("/assets/"):].lstrip("/")
+            root = os.path.abspath(ASSETS_DIR)
+            path = os.path.abspath(os.path.join(root, rel))
+            return path if os.path.commonpath([root, path]) == root else None
+        if clean.startswith("/output/"):
+            rel = clean[len("/output/"):].lstrip("/")
+            root = os.path.abspath(OUTPUT_OUTPUT_DIR)
+            path = os.path.abspath(os.path.join(root, rel))
+            return path if os.path.commonpath([root, path]) == root else None
+    except Exception:
+        return None
+    return None
+
+
+_CANVAS_ASSET_CHECK_CACHE = {}
+_CANVAS_ASSET_CHECK_TTL = float(os.getenv("CANVAS_ASSET_CHECK_TTL", "60"))
+
+
+def canvas_asset_exists(url):
+    """判断画布媒体资源是否存在。只做本地 stat 或 R2 HEAD，不下载文件本体。"""
+    text = str(url or "").strip()
+    if not text:
+        return True
+    if text.startswith(("data:", "blob:")):
+        return True
+    if text.startswith(("http://", "https://")):
+        if storage_r2.is_configured():
+            key = storage_r2.key_from_public_url(text)
+            if key:
+                status = storage_r2.object_exists_status(key)
+                if status is not None:
+                    return status
+        return True
+    local = canvas_asset_url_to_local_path(text)
+    if local:
+        if os.path.exists(local):
+            return True
+        if storage_r2.is_configured():
+            key = _r2_key_for_path(local)
+            if key:
+                status = storage_r2.object_exists_status(key)
+                if status is not None:
+                    return status
+        return False
+    return True
+
 def collect_local_media_urls(value: Any) -> List[str]:
     """Collect local /assets and /output URLs from nested canvas log payloads."""
     urls = []
@@ -7264,6 +7418,16 @@ def media_preview_cache_paths(path: str, width: int):
         os.path.join(MEDIA_PREVIEW_DIR, f"{key}.png"),
     )
 
+
+def media_preview_cache_paths_for_seed(seed: str, width: int, mtime_ns: int = 0, size: int = 0):
+    key = hashlib.sha1(
+        f"{seed}|{mtime_ns}|{size}|{width}".encode("utf-8", "ignore")
+    ).hexdigest()
+    return (
+        os.path.join(MEDIA_PREVIEW_DIR, f"{key}.webp"),
+        os.path.join(MEDIA_PREVIEW_DIR, f"{key}.png"),
+    )
+
 def is_video_preview_file(path: str) -> bool:
     return os.path.splitext(str(path or "").split("?", 1)[0])[1].lower() in {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
 
@@ -7297,26 +7461,58 @@ def generate_video_preview_image(path: str, width: int) -> Image.Image:
 
 @app.get("/api/media-preview")
 async def media_preview(url: str, w: int = 512):
-    path = output_file_from_url(url)
-    if not path or not os.path.isfile(path):
+    local = canvas_asset_url_to_local_path(url)
+    r2_key = None
+    r2_bytes = None
+    source_path = None
+    if local and os.path.isfile(local):
+        source_path = local
+    elif storage_r2.is_configured():
+        r2_key = (_r2_key_for_path(local) if local else storage_r2.key_from_public_url(url)) or None
+        if r2_key:
+            r2_bytes = await asyncio.to_thread(storage_r2.download_bytes, r2_key)
+    if not source_path and not r2_bytes:
         raise HTTPException(status_code=404, detail="媒体文件不存在")
 
     width = max(64, min(2048, int(w or 512)))
-    webp_path, png_path = media_preview_cache_paths(path, width)
+    if source_path:
+        cache_seed = source_path
+        mtime_ns = os.stat(source_path).st_mtime_ns
+        size = os.stat(source_path).st_size
+        is_video = is_video_preview_file(source_path)
+    else:
+        cache_seed = r2_key or url
+        mtime_ns = 0
+        size = len(r2_bytes)
+        is_video = is_video_preview_file(url)
+    webp_path, png_path = media_preview_cache_paths_for_seed(cache_seed, width, mtime_ns, size)
 
     if os.path.exists(webp_path):
-        return FileResponse(webp_path, media_type="image/webp")
+        return FileResponse(webp_path, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
     if os.path.exists(png_path):
-        return FileResponse(png_path, media_type="image/png")
+        return FileResponse(png_path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
     def _build_preview():
         # 同步 PIL 处理 + 落盘，放到线程里执行，避免阻塞事件循环（几十张首次生成会卡死整个 loop → 缩略图全空白）
         os.makedirs(MEDIA_PREVIEW_DIR, exist_ok=True)
-        if is_video_preview_file(path):
-            img = generate_video_preview_image(path, width)
+        if is_video:
+            if source_path:
+                img = generate_video_preview_image(source_path, width)
+            else:
+                fd, tmp_path = tempfile.mkstemp(prefix="media_preview_video_", suffix=".mp4")
+                try:
+                    with os.fdopen(fd, "wb") as fh:
+                        fh.write(r2_bytes)
+                    img = generate_video_preview_image(tmp_path, width)
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
         else:
-            with Image.open(path) as source:
-                img = ImageOps.exif_transpose(source)
+            source = source_path if source_path else BytesIO(r2_bytes)
+            with Image.open(source) as source_img:
+                img = ImageOps.exif_transpose(source_img)
                 img.thumbnail((width, width), Image.LANCZOS)
                 img = img.convert("RGBA" if image_has_alpha(img) else "RGB")
         try:
@@ -7328,9 +7524,10 @@ async def media_preview(url: str, w: int = 512):
 
     try:
         out_path, media_type = await asyncio.to_thread(_build_preview)
-        return FileResponse(out_path, media_type=media_type)
+        return FileResponse(out_path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
     except Exception as exc:
-        raise HTTPException(status_code=415, detail=f"无法生成预览图：{exc}") from exc
+        logger.info(f"[media-preview] build failed for {url}: {exc}")
+        raise HTTPException(status_code=502, detail="预览图生成失败") from exc
 
 @app.get("/api/image-jpeg")
 async def image_jpeg(url: str, w: int = 0):
@@ -11986,7 +12183,12 @@ def download_output(request: Request, url: str, name: str = "", inline: bool = F
         path = local_media_file_by_basename(filename_from_media_url(url, ""))
     if path:
         filename = sanitize_export_filename(os.path.basename(name) if name else os.path.basename(path), os.path.basename(path))
-        return FileResponse(path, media_type=content_type_for_path(path), filename=None if inline else filename)
+        return FileResponse(
+            path,
+            media_type=content_type_for_path(path),
+            filename=None if inline else filename,
+            headers={"Cache-Control": "private, max-age=60", "Content-Encoding": "identity"},
+        )
     # 远程文件：流式代理，绝不把整段视频/大文件读进内存（否则多个视频同时代理会撑爆内存、拖垮单进程服务）。
     parsed = urllib.parse.urlparse(str(url or "").strip())
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -12021,6 +12223,8 @@ def download_output(request: Request, url: str, name: str = "", inline: bool = F
         finally:
             upstream.close()
 
+    headers["Cache-Control"] = "private, max-age=60"
+    headers["Content-Encoding"] = "identity"
     return StreamingResponse(stream_remote(), media_type=content_type, headers=headers, status_code=upstream.status_code)
 
 @app.post("/api/upload")
@@ -12092,7 +12296,17 @@ async def upload_ai_reference(files: List[UploadFile] = File(...)):
         path = output_path_for(filename, "input")
         with open(path, "wb") as f:
             f.write(content)
-        uploaded.append({"url": output_url_for(filename, "input"), "name": file.filename or filename, "kind": kind, "mime": content_type})
+        meta = {"url": output_url_for(filename, "input"), "name": file.filename or filename, "kind": kind, "mime": content_type, "size": len(content)}
+        if kind == "image":
+            try:
+                with Image.open(path) as opened:
+                    width, height = opened.size
+                    meta["width"] = width
+                    meta["height"] = height
+                    meta["format"] = (opened.format or ext.lstrip(".")).lower()
+            except Exception:
+                pass
+        uploaded.append(meta)
     return {"files": uploaded}
 
 class Base64UploadRequest(BaseModel):
@@ -13406,6 +13620,8 @@ async def ai_config():
         "has_api_key": bool(AI_API_KEY),
         "ms_chat_models": MODELSCOPE_CHAT_MODELS,
         "has_ms_key": bool(modelscope_api_key()),
+        "r2_configured": storage_r2.is_configured(),
+        "r2_public_base": storage_r2.public_base_url() or "",
     }
 
 @app.get("/api/models")
@@ -13430,6 +13646,19 @@ async def api_health():
         "db_configured": db_configured,
         "db_ok": db_ok,
     }
+
+
+@app.post("/api/perf")
+async def perf_marks(payload: Dict[str, Any]):
+    """接收前端性能标记（非敏感、不鉴权、仅记录，用于定位首屏耗时）。"""
+    try:
+        marks = payload.get("marks") if isinstance(payload.get("marks"), list) else []
+        route = str(payload.get("route") or "canvas")[:60]
+        summary = {str(item.get("name") or ""): round(float(item.get("t") or 0)) for item in marks if isinstance(item, dict)}
+        logger.info(f"[perf] route={route} marks={json.dumps(summary, ensure_ascii=False)[:500]}")
+    except Exception as exc:
+        logger.info(f"[perf] ignore malformed payload: {exc}")
+    return {"ok": True}
 
 @app.put("/api/providers")
 async def save_providers(payload: List[ApiProviderPayload]):
@@ -16506,9 +16735,35 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate, request:
     return {"canvas": canvas_record(canvas)}
 
 @app.get("/api/canvases/{canvas_id}")
-async def get_canvas(canvas_id: str, request: Request):
+async def get_canvas(canvas_id: str, request: Request, include_logs: int = 0):
+    st = ServerTiming()
     user = require_current_user(request)
-    return {"canvas": load_canvas(canvas_id, user["id"])}
+    st.mark("auth")
+    canvas = await asyncio.to_thread(load_canvas, canvas_id, user["id"])
+    st.mark("query")
+    etag = f'"{canvas.get("updated_at") or 0}-{canvas.get("id") or ""}"'
+    if_none_match = request.headers.get("if-none-match", "")
+    if if_none_match and etag in [part.strip() for part in if_none_match.split(",")]:
+        return Response(status_code=304, headers={"ETag": etag, "Server-Timing": st.header(), "Cache-Control": "no-cache"})
+    payload = dict(canvas)
+    if not include_logs:
+        payload.pop("logs", None)
+    st.mark("serialize")
+    return JSONResponse(
+        {"canvas": payload},
+        headers={"ETag": etag, "Server-Timing": st.header(), "Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/api/canvases/{canvas_id}/logs")
+async def get_canvas_logs(canvas_id: str, request: Request, limit: int = 100, offset: int = 0):
+    user = require_current_user(request)
+    canvas = await asyncio.to_thread(load_canvas, canvas_id, user["id"])
+    logs = canvas.get("logs") or []
+    total = len(logs)
+    limit = max(1, min(500, int(limit or 100)))
+    offset = max(0, int(offset or 0))
+    return {"logs": logs[offset:offset + limit], "total": total, "limit": limit, "offset": offset}
 
 @app.post("/api/canvases/{canvas_id}/touch")
 async def touch_canvas(canvas_id: str, request: Request):
@@ -16531,16 +16786,40 @@ async def list_canvas_assets(request: Request):
 
 @app.post("/api/canvas-assets/check")
 async def check_canvas_assets(payload: CanvasAssetCheckRequest):
-    result = {}
+    st = ServerTiming()
+    seen = set()
+    urls = []
     for url in payload.urls[:3000]:
         text = str(url or "").strip()
-        if not text:
+        if not text or text in seen:
             continue
-        if text.startswith("/output/") or text.startswith("/assets/"):
-            result[text] = bool(output_file_from_url(text))
-        else:
-            result[text] = True
-    return {"exists": result}
+        seen.add(text)
+        urls.append(text)
+    semaphore = asyncio.Semaphore(12)
+    result = {}
+    cache_hits = 0
+    now = time.monotonic()
+
+    async def check_one(url):
+        nonlocal cache_hits
+        cached = _CANVAS_ASSET_CHECK_CACHE.get(url)
+        if cached and now - cached[0] < _CANVAS_ASSET_CHECK_TTL:
+            cache_hits += 1
+            result[url] = cached[1]
+            return
+        async with semaphore:
+            try:
+                exists = await asyncio.wait_for(asyncio.to_thread(canvas_asset_exists, url), timeout=3.5)
+            except Exception:
+                exists = True  # 超时/异常按“未知”处理，避免误标缺失
+        _CANVAS_ASSET_CHECK_CACHE[url] = (time.monotonic(), exists)
+        result[url] = exists
+
+    await asyncio.gather(*(check_one(url) for url in urls))
+    missing = sum(1 for value in result.values() if value is False)
+    st.mark("check", desc=f"{len(urls)} urls, {cache_hits} cached")
+    logger.info(f"[canvas-assets] checked {len(urls)} urls ({cache_hits} cache hits, {missing} missing)")
+    return JSONResponse({"exists": result}, headers={"Server-Timing": st.header()})
 
 @app.post("/api/canvas-assets/download")
 async def download_canvas_assets(payload: CanvasAssetDownloadRequest):
@@ -17572,7 +17851,8 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest, request: Req
                 canvas["viewport"] = payload.viewport
             else:
                 canvas["viewport"] = canvas.get("viewport") or {"x": 0, "y": 0, "scale": 1}
-            canvas["logs"] = payload.logs[-500:]
+            if payload.logs is not None:
+                canvas["logs"] = payload.logs[-500:]
             canvas["settings"] = payload.settings or {}
             save_canvas(canvas)
             return canvas

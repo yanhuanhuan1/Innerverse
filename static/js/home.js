@@ -558,6 +558,11 @@ function canvasUrl(canvas, opts={}){
 
 function openCanvas(canvas){
     if(!canvas?.id) return;
+    try {
+        performance.mark('project_click');
+        const body = JSON.stringify({route: 'home', marks: [{name: 'project_click', t: Math.round(performance.now())}]});
+        if(navigator.sendBeacon) navigator.sendBeacon('/api/perf', new Blob([body], {type: 'application/json'}));
+    } catch(e) {}
     window.location.href = canvasUrl(canvas);
 }
 

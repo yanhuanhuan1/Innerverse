@@ -218,5 +218,140 @@ class ApimartMidjourneyRoutingTests(unittest.TestCase):
         self.assertEqual(items[3]["value"], "https://cdn.apimart.ai/jobs/4/jkl")
 
 
+class CanvasPerfHelpersTests(unittest.TestCase):
+    """首屏优化新增辅助函数的单元测试。"""
+
+    def test_asset_path_mapping_and_local_exists(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            existing = os.path.join(tmp, "a.png")
+            with open(existing, "wb") as fh:
+                fh.write(b"x")
+            with patch.object(main, "ASSETS_DIR", tmp):
+                self.assertEqual(main.canvas_asset_url_to_local_path("/assets/a.png"), existing)
+                self.assertTrue(main.canvas_asset_exists("/assets/a.png"))
+                self.assertFalse(main.canvas_asset_exists("/assets/missing.png"))
+                self.assertIsNone(main.canvas_asset_url_to_local_path("/assets/../secret"))
+                self.assertTrue(main.canvas_asset_exists("https://cdn.example.com/x.png"))
+                self.assertTrue(main.canvas_asset_exists("data:image/png;base64,AAAA"))
+
+    def test_asset_check_uses_head_not_download(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(main, "ASSETS_DIR", tmp), \
+                patch.object(main.storage_r2, "is_configured", return_value=True), \
+                patch.object(main.storage_r2, "object_exists_status", return_value=True) as head, \
+                patch.object(main.storage_r2, "download_bytes") as download:
+                self.assertTrue(main.canvas_asset_exists("/assets/a.png"))
+                head.assert_called_once()
+                download.assert_not_called()
+
+    def test_server_timing_header(self):
+        st = main.ServerTiming()
+        st.mark("auth", dur=1.5)
+        st.mark("query", dur=2.25, desc="kv_get")
+        header = st.header()
+        self.assertIn("auth;dur=1.5", header)
+        self.assertIn("query;dur=2.2", header)
+        self.assertIn('desc="kv_get"', header)
+
+    def test_preview_cache_seed_paths(self):
+        first = main.media_preview_cache_paths_for_seed("key", 512, 1, 2)
+        second = main.media_preview_cache_paths_for_seed("key", 512, 1, 3)
+        self.assertNotEqual(first, second)
+        self.assertTrue(str(first[0]).endswith(".webp"))
+        self.assertTrue(str(first[1]).endswith(".png"))
+
+    def test_meta_float(self):
+        self.assertEqual(main._meta_float("1.5"), 1.5)
+        self.assertIsNone(main._meta_float(""))
+        self.assertIsNone(main._meta_float("abc"))
+
+
+class CanvasApiLogsSplitTests(unittest.TestCase):
+    """GET /api/canvases/{id} 默认不返回 logs；日志独立接口分页；PUT 在 logs=None 时保留原日志。"""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.user_patch = patch.object(main, "require_current_user", return_value={"id": "u1"})
+        self.user_patch.start()
+        self.client = TestClient(main.app)
+
+    def tearDown(self):
+        self.user_patch.stop()
+
+    def _canvas(self):
+        return {
+            "id": "c1",
+            "title": "T",
+            "kind": "classic",
+            "nodes": [{"id": "n1", "type": "prompt"}],
+            "connections": [],
+            "viewport": {"x": 0, "y": 0, "scale": 1},
+            "logs": [{"id": "l1", "status": "success"}],
+            "updated_at": 123,
+        }
+
+    def test_get_canvas_excludes_logs_by_default(self):
+        with patch.object(main, "load_canvas", return_value=self._canvas()):
+            response = self.client.get("/api/canvases/c1")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("logs", response.json()["canvas"])
+        self.assertIn("ETag", response.headers)
+        self.assertIn("Server-Timing", response.headers)
+
+    def test_get_canvas_can_include_logs(self):
+        with patch.object(main, "load_canvas", return_value=self._canvas()):
+            response = self.client.get("/api/canvases/c1", params={"include_logs": 1})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("logs", response.json()["canvas"])
+
+    def test_etag_returns_304(self):
+        with patch.object(main, "load_canvas", return_value=self._canvas()):
+            first = self.client.get("/api/canvases/c1")
+            etag = first.headers.get("ETag")
+            self.assertTrue(etag)
+            second = self.client.get("/api/canvases/c1", headers={"If-None-Match": etag})
+        self.assertEqual(second.status_code, 304)
+
+    def test_logs_endpoint_paginated(self):
+        logs = [{"id": f"l{i}"} for i in range(120)]
+        with patch.object(main, "load_canvas", return_value={**self._canvas(), "logs": logs}):
+            response = self.client.get("/api/canvases/c1/logs", params={"limit": 50, "offset": 0})
+        data = response.json()
+        self.assertEqual(len(data["logs"]), 50)
+        self.assertEqual(data["total"], 120)
+        self.assertEqual(data["offset"], 0)
+
+    def test_put_preserves_logs_when_null(self):
+        saved = {}
+
+        def fake_save(canvas):
+            saved["canvas"] = canvas
+
+        payload = {
+            "title": "T",
+            "icon": "layers",
+            "nodes": [],
+            "connections": [],
+            "viewport": {},
+            "logs": None,
+            "settings": {},
+            "client_id": "",
+            "base_updated_at": 0,
+        }
+        async def _noop_broadcast(*args, **kwargs):
+            return None
+
+        with patch.object(main, "load_canvas", return_value=self._canvas()), \
+            patch.object(main, "save_canvas", side_effect=fake_save), \
+            patch.object(main.manager, "broadcast_canvas_updated", new=_noop_broadcast):
+            response = self.client.put("/api/canvases/c1", json=payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(saved["canvas"]["logs"], [{"id": "l1", "status": "success"}])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,14 +19,20 @@
         })();
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.23.1784878252"></script>
-    <script src="/static/vendor/js/lucide.js?v=2026.07.23.1784878252"></script>
+    <script defer src="/static/vendor/js/lucide.js?v=2026.07.23.1784878252"></script>
     <script src="/static/js/theme.js?v=2026.07.23.1784878252"></script>
-    <script src="/static/js/touch-mouse.js?v=2026.07.23.1784878252"></script>
-    <script src="/static/js/i18n.js?v=2026.07.23.1784878252"></script>
+    <script defer src="/static/js/touch-mouse.js?v=2026.07.23.1784878252"></script>
+    <script defer src="/static/js/i18n.js?v=2026.07.23.1784878252"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.23.1784878252">
-    <link rel="stylesheet" href="/static/css/canvas.css?v=2026.07.30.0948">
+    <link rel="stylesheet" href="/static/css/canvas.css?v=2026.08.04.perf1">
 </head>
 <body>
+    <div id="canvasBoot" class="canvas-boot" aria-live="polite">
+        <div class="canvas-boot-inner">
+            <span class="canvas-boot-spinner"></span>
+            <span>正在加载画布…</span>
+        </div>
+    </div>
     <div id="shell" class="shell no-canvas">
         <div class="topbar">
             <div class="panel canvas-nav">
@@ -331,7 +337,7 @@
         </div>
     </div>
 
-    <script src="/static/js/ltx-director-timeline.js?v=2026.07.23.1784878252"></script>
-    <script src="/static/js/canvas.js?v=2026.07.30.0948"></script>
+    <script defer src="/static/js/ltx-director-timeline.js?v=2026.07.23.1784878252"></script>
+    <script defer src="/static/js/canvas.js?v=2026.08.04.perf1"></script>
 </body>
 </html>

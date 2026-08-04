@@ -5,6 +5,10 @@
 html { height:100%; overflow:hidden !important; overscroll-behavior:none; }
 body { margin:0; height:100vh; overflow:hidden !important; overscroll-behavior:none; background:var(--page); color:var(--text); font-family:'Inter',-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
 .shell { position:relative; height:100vh; overflow:clip !important; overscroll-behavior:none; }
+.canvas-boot { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center; background:var(--soft, #f8fafc); transition:opacity .3s ease; }
+.canvas-boot.hidden { opacity:0; pointer-events:none; }
+.canvas-boot-inner { display:flex; align-items:center; gap:12px; padding:14px 20px; border-radius:999px; background:var(--card-solid, #fff); border:1px solid var(--line, #e2e8f0); box-shadow:0 12px 32px rgba(15,23,42,.12); color:var(--muted, #64748b); font-size:13px; font-weight:800; }
+.canvas-boot-spinner { width:18px; height:18px; border-radius:50%; border:3px solid #e2e8f0; border-top-color:#94a3b8; animation:spin .8s linear infinite; }
 html[data-studio-scale="off"].studio-scale-managed .topbar,
 html[data-studio-scale="off"].studio-scale-managed .library,
 html[data-studio-scale="off"].studio-scale-managed .workflow-transfer-panel,

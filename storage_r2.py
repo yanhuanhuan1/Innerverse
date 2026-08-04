@@ -50,7 +50,12 @@ def _get_client():
             endpoint_url=f"https://{_R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
             aws_access_key_id=_R2_ACCESS_KEY_ID,
             aws_secret_access_key=_R2_SECRET_ACCESS_KEY,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=3.0,
+                read_timeout=20.0,
+                retries={"max_attempts": 2, "mode": "standard"},
+            ),
             region_name="auto",
         )
         return _client
@@ -71,6 +76,18 @@ def public_url_for(rel_path: str) -> Optional[str]:
         return None
     clean = str(rel_path or "").replace("\\", "/").lstrip("/")
     return f"{_R2_PUBLIC_BASE_URL}/{urllib.parse.quote(clean, safe='/')}"
+
+
+def key_from_public_url(url: str) -> Optional[str]:
+    """反向映射：把 R2 公共 CDN 地址还原为对象键（无公共域名时返回 None）。"""
+    if not _R2_PUBLIC_BASE_URL:
+        return None
+    text = str(url or "").strip()
+    base = _R2_PUBLIC_BASE_URL.rstrip("/")
+    if not text.startswith(base + "/"):
+        return None
+    key = urllib.parse.unquote(text[len(base) + 1:].split("?", 1)[0]).replace("\\", "/").lstrip("/")
+    return key or None
 
 
 def upload_bytes(rel_path: str, data: bytes, content_type: str = "") -> bool:
@@ -151,6 +168,26 @@ def object_exists(rel_path: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def object_exists_status(rel_path: str) -> Optional[bool]:
+    """HEAD 检查对象是否存在：True=存在，False=确定不存在，None=未知（网络/权限等异常）。"""
+    client = _get_client()
+    if not client:
+        return None
+    clean = str(rel_path or "").replace("\\", "/").lstrip("/")
+    if not clean:
+        return False
+    try:
+        client.head_object(Bucket=_R2_BUCKET_NAME, Key=clean)
+        return True
+    except Exception as exc:
+        message = str(exc)
+        error = (getattr(exc, "response", None) or {}).get("Error", {}) if hasattr(exc, "response") else {}
+        code = str(error.get("Code", "") or "")
+        if "NoSuchKey" in message or code == "NoSuchKey" or "404" in message:
+            return False
+        return None
 
 
 def list_objects(prefix: str):
