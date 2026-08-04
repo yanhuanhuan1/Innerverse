@@ -141,7 +141,7 @@ npm install --no-audit --no-fund
 npm run build   # 运行 build.mjs：压缩核心与 chunk、生成 lucide-slim、内容 hash 与 manifest，并改写 canvas.html 引用
 ```
 
-Vercel 已在 `vercel.json` 配置 `installCommand` 与 `buildCommand`，部署时自动执行。构建产物输出到 `static/js/build/`（带内容 hash），由静态中间件按 immutable 长期缓存；`canvas.html` 只引用 `manifest.js` + 带 hash 的 `canvas-core` 与 `lucide-slim`，非首屏功能（日志/灯箱/导出/工作流/媒体/节点渲染器）由核心按需加载对应 chunk。
+构建产物输出到 `static/js/build/`（带内容 hash）并提交到仓库；Vercel 部署直接使用提交的产物（不在 Vercel 上跑前端构建，避免自定义 buildCommand 干扰 Python 依赖安装）。修改 `canvas.js`/分块源码后，先在本地执行 `npm run build` 再把产物一起提交。静态中间件对 `/static/js/build/` 按 immutable 长期缓存；`canvas.html` 只引用 `manifest.js` + 带 hash 的 `canvas-core` 与 `lucide-slim`，非首屏功能（日志/灯箱/导出/工作流/媒体/节点渲染器）由核心按需加载对应 chunk。
 
 ## Database Connection (Vercel + Neon)
 
