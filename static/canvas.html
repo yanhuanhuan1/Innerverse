@@ -134,8 +134,11 @@
                 </div>
                 <img id="outputLightboxImg" class="output-single-img" src="" alt="output preview">
                 <video id="outputLightboxVideo" class="output-single-video" src="" controls playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" style="display:none"></video>
+                <button id="outputLightboxPrev" class="output-lightbox-nav nav-prev" type="button" title="上一张" aria-label="上一张" style="display:none" onclick="navigateOutputLightbox(-1)"><i data-lucide="chevron-left" class="w-5 h-5"></i></button>
+                <button id="outputLightboxNext" class="output-lightbox-nav nav-next" type="button" title="下一张" aria-label="下一张" style="display:none" onclick="navigateOutputLightbox(1)"><i data-lucide="chevron-right" class="w-5 h-5"></i></button>
                 <div class="output-preview-bar">
                     <div id="outputResolution" class="output-resolution">--</div>
+                    <div id="outputLightboxCounter" class="output-lightbox-counter" style="display:none"></div>
                     <div class="output-preview-actions">
                         <button id="outputDownloadBtn" class="preview-icon-btn" type="button" title="下载" aria-label="下载" data-i18n-title="canvas.download"><i data-lucide="download" class="w-4 h-4"></i></button>
                         <button id="outputDownloadAllBtn" class="preview-icon-btn" type="button" title="下载全部图片" aria-label="下载全部图片" data-i18n-title="canvas.outputDownloadAllImages" style="display:none"><i data-lucide="archive" class="w-4 h-4"></i></button>

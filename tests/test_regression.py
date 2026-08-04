@@ -196,6 +196,27 @@ class ApimartMidjourneyRoutingTests(unittest.TestCase):
         self.assertIn("get_channel_failed", detail)
         self.assertIn("稍后重试", detail)
 
+    def test_extract_images_handles_apimart_midjourney_four_outputs(self):
+        payload = {
+            "data": {
+                "task_id": "mj_task_x",
+                "status": "SUCCESS",
+                "result": {
+                    "images": [
+                        {"url": "https://cdn.apimart.ai/jobs/1/abc"},
+                        {"url": "https://cdn.apimart.ai/jobs/2/def"},
+                        {"url": "https://cdn.apimart.ai/jobs/3/ghi"},
+                        {"url": "https://cdn.apimart.ai/jobs/4/jkl"},
+                    ]
+                }
+            }
+        }
+        items = main.extract_images(payload)
+        self.assertEqual(len(items), 4)
+        self.assertTrue(all(item["type"] == "url" for item in items))
+        self.assertEqual(items[0]["value"], "https://cdn.apimart.ai/jobs/1/abc")
+        self.assertEqual(items[3]["value"], "https://cdn.apimart.ai/jobs/4/jkl")
+
 
 if __name__ == "__main__":
     unittest.main()

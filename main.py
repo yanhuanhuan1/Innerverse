@@ -4204,11 +4204,19 @@ def extract_images(data):
                 collect(item)
                 continue
             url = item.get("url")
-            if isinstance(url, list):
-                for one in url:
-                    collect(one)
-            else:
-                collect(url)
+            urls = url if isinstance(url, list) else [url]
+            for one in urls:
+                if isinstance(one, str) and one.strip():
+                    # 图片容器里的 http(s) 链接即使不带扩展名（例如 CDN 签名 URL）也按图片 URL 处理。
+                    if one.startswith(("http://", "https://", "/output/", "/assets/")):
+                        add_image({"type": "url", "value": one.strip()})
+                        continue
+                    if one.startswith("data:image/"):
+                        payload = image_payload_from_string(one)
+                        if payload:
+                            add_image(payload)
+                            continue
+                collect(one)
             collect(item)
 
     collect(data)

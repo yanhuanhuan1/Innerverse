@@ -14266,7 +14266,25 @@ function outputLightboxItems(out=null){
     if(sourceOut){
         if(sourceOut.type === 'group') return groupImageItems(sourceOut).map(item => normalize(item, sourceOut)).filter(Boolean);
         if(sourceOut.type === 'image' && sourceOut.url) return [normalize({url:sourceOut.url, kind:mediaKindForNode(sourceOut)}, sourceOut)].filter(Boolean);
-        return (sourceOut.images || []).map(item => normalize(item, sourceOut)).filter(Boolean);
+        const items = [];
+        inlineGeneratedOutputItems(sourceOut).forEach(item => {
+            const normalized = normalize(item, sourceOut);
+            if(normalized) items.push(normalized);
+        });
+        (sourceOut.images || []).forEach(item => {
+            const normalized = normalize(item, sourceOut);
+            if(normalized) items.push(normalized);
+        });
+        if(sourceOut.url && mediaKindForNode(sourceOut) === 'image'){
+            const normalized = normalize({url:sourceOut.url, kind:'image'}, sourceOut);
+            if(normalized) items.push(normalized);
+        }
+        const seen = new Set();
+        return items.filter(item => {
+            if(seen.has(item.url)) return false;
+            seen.add(item.url);
+            return true;
+        });
     }
     const generatedNodeItems = nodes
         .filter(n => CANVAS_MEDIA_OUTPUT_TYPES.includes(n.type))
@@ -14865,7 +14883,7 @@ function initOutputPreviewZoomEvents(){
     outputPreview.addEventListener('mousedown', e => {
         if(outputLightboxVideo.style.display === 'block') return;
         if(e.button !== 0 || outputPreviewZoom <= 1.001) return;
-        if(e.target.closest('.output-preview-actions, .output-resolution, .output-compare-slider')) return;
+        if(e.target.closest('.output-preview-actions, .output-resolution, .output-compare-slider, .output-lightbox-nav, .output-lightbox-counter')) return;
         outputPreviewPanDrag = {
             sx:e.clientX,
             sy:e.clientY,
@@ -14958,6 +14976,7 @@ function openOutputLightbox(url, out){
             e.stopPropagation();
             downloadUrl(url, outputDownloadName(url)).catch(err => alert(err.message || '下载失败'));
         };
+        syncOutputLightboxNav(out);
         outputLightbox.classList.add('open');
         refreshIcons();
         return;
@@ -14997,8 +15016,25 @@ function openOutputLightbox(url, out){
         e.stopPropagation();
         downloadUrl(url, outputDownloadName(url)).catch(err => alert(err.message || '下载失败'));
     };
+    syncOutputLightboxNav(out);
     outputLightbox.classList.add('open');
     refreshIcons();
+}
+function syncOutputLightboxNav(out){
+    const items = outputLightboxItems(out);
+    const hasMany = items.length > 1;
+    if(outputLightboxPrev) outputLightboxPrev.style.display = hasMany ? 'flex' : 'none';
+    if(outputLightboxNext) outputLightboxNext.style.display = hasMany ? 'flex' : 'none';
+    if(outputLightboxCounter){
+        if(!hasMany){
+            outputLightboxCounter.style.display = 'none';
+            outputLightboxCounter.textContent = '';
+            return;
+        }
+        const idx = items.findIndex(item => item.url === currentOutputLightboxUrl);
+        outputLightboxCounter.style.display = 'flex';
+        outputLightboxCounter.textContent = `${idx >= 0 ? idx + 1 : 1} / ${items.length}`;
+    }
 }
 function closeOutputLightbox(){
     outputLightbox.classList.remove('open');
@@ -15013,6 +15049,12 @@ function closeOutputLightbox(){
     outputCompareResult.src = '';
     outputCompareOriginal.src = '';
     outputPreview.ondblclick = null;
+    if(outputLightboxPrev) outputLightboxPrev.style.display = 'none';
+    if(outputLightboxNext) outputLightboxNext.style.display = 'none';
+    if(outputLightboxCounter){
+        outputLightboxCounter.style.display = 'none';
+        outputLightboxCounter.textContent = '';
+    }
     if(outputDownloadAllBtn){
         outputDownloadAllBtn.style.display = 'none';
         outputDownloadAllBtn.onclick = null;
