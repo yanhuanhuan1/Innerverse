@@ -1708,8 +1708,38 @@ async def canvas_page():
     return static_html_response("canvas.html")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
-app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+def _serve_media_root(root, rel_path):
+    """安全解析媒体目录下的文件；本地缺失时尝试从 R2 拉取（无状态实例懒加载）。"""
+    rel = urllib.parse.unquote(str(rel_path or "")).replace("\\", "/").lstrip("/")
+    if not rel:
+        return None
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, rel))
+    try:
+        if os.path.commonpath([root_abs, path]) != root_abs:
+            return None
+    except ValueError:
+        return None
+    if os.path.isfile(path):
+        return path
+    if storage_r2.is_configured() and _r2_hydrate_local(path):
+        return path
+    return None
+
+@app.get("/output/{rel_path:path}")
+def serve_output_file(rel_path: str):
+    path = _serve_media_root(OUTPUT_DIR, rel_path)
+    if not path:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return FileResponse(path, media_type=content_type_for_path(path), headers={"Cache-Control": "public, max-age=3600"})
+
+@app.get("/assets/{rel_path:path}")
+def serve_assets_file(rel_path: str):
+    path = _serve_media_root(ASSETS_DIR, rel_path)
+    if not path:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return FileResponse(path, media_type=content_type_for_path(path), headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.middleware("http")
