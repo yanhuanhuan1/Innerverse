@@ -9838,6 +9838,10 @@ def is_gpt_image_2_model(model):
         or compact.endswith("gptimage2")
     )
 
+def is_midjourney_model(model):
+    raw = str(model or "").strip().lower()
+    return raw in {"midjourney", "mj"} or raw.startswith("midjourney-") or raw.startswith("mj-")
+
 def normalize_gpt_image_2_size(size):
     width, height = parse_size_pair(size)
     if not width or not height:
@@ -9995,6 +9999,8 @@ def friendly_image_error_detail(text, size="", model=""):
         return "请求过于频繁，已被上游限流，请稍后再试。"
     if "unauthorized" in lower_text or "401" in lower_text:
         return "API Key 无效或已过期，请到「API 设置」检查 Key。"
+    if "get_channel_failed" in lower_text or "channel_failed" in lower_text:
+        return "上游当前没有可用通道（get_channel_failed），官方提示请稍后重试。系统已自动重试，若仍失败请过几分钟再生成，或暂时换用其他模型。"
     if "model_not_found" in lower_text or "channel not found" in lower_text:
         return f"上游平台找不到模型「{model}」可用通道。可能该模型未在此账号开通，请换一个已开通的模型。"
     return ""
@@ -11422,7 +11428,25 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 files=edit_files if edit_files is not None else {},
             )
 
-        if image_request_mode == "openai-video-proxy":
+        if is_apimart and is_midjourney_model(model):
+            # APIMart 的 Midjourney 走专用接口 /v1/midjourney/generations（等同 Imagine），
+            # 走通用 /v1/images/generations 会因找不到对应通道而返回 get_channel_failed (HTTP 500)。
+            mj_size, _mj_resolution = apimart_size_resolution(size)
+            mj_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/midjourney/generations")
+            mj_body = {"model": model, "prompt": prompt, "size": mj_size}
+            if image_refs:
+                mj_body["image_urls"] = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
+            mj_headers = api_headers(provider=provider, model=model)
+            response = await client.post(mj_url, headers=mj_headers, json=mj_body)
+            # get_channel_failed：上游本次未获取到可用通道（未创建任务、不会扣费），
+            # 官方提示“请稍后重试”，这里做有限次数的退避重试。
+            for _retry in range(2):
+                if response.status_code != 500 or "get_channel_failed" not in (response.text or ""):
+                    break
+                await asyncio.sleep(3.0 * (_retry + 1))
+                response = await client.post(mj_url, headers=mj_headers, json=mj_body)
+
+        elif image_request_mode == "openai-video-proxy":
             body = {
                 "model": model,
                 "prompt": prompt,

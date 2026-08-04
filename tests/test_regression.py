@@ -83,5 +83,119 @@ class CanvasCrudRoundtripTests(unittest.TestCase):
         self.assertEqual(len(main.load_projects()), len(second))
 
 
+class ApimartMidjourneyRoutingTests(unittest.TestCase):
+    """APIMart 的 Midjourney 必须走 /v1/midjourney/generations 专用接口，
+    而不是通用 /v1/images/generations（否则上游返回 get_channel_failed 500）。"""
+
+    def setUp(self):
+        self.provider_patch = patch.object(main, "provider_env_key_value", return_value="test-key")
+        self.provider_patch.start()
+
+    def tearDown(self):
+        self.provider_patch.stop()
+
+    def _fake_post_run(self, responses):
+        import asyncio
+
+        class FakeResponse:
+            def __init__(self, status_code, payload, text):
+                self.status_code = status_code
+                self._payload = payload
+                self.text = text
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise httpx_error(self.status_code)
+
+        def httpx_error(status):
+            response = FakeResponse(status, {}, "")
+            return main.httpx.HTTPStatusError("request failed", request=None, response=response)
+
+        class FakeClient:
+            def __init__(self):
+                self.posts = []
+
+            async def post(self, url, headers=None, json=None, **kwargs):
+                self.posts.append((url, json))
+                item = responses.pop(0) if len(responses) > 1 else responses[0]
+                return FakeResponse(item["status"], item.get("payload", {}), item.get("text", ""))
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        client = FakeClient()
+
+        async def run():
+            return await main.generate_ai_image(
+                "a cat in a hat",
+                "1024x1024",
+                "high",
+                self.model,
+                provider_id="apimart",
+                wait_for_async=False,
+            )
+
+        with patch.object(main.httpx, "AsyncClient", return_value=client):
+            result = asyncio.run(run())
+        return client.posts, result
+
+    def test_midjourney_uses_dedicated_endpoint_and_clean_body(self):
+        self.model = "midjourney"
+        posts, result = self._fake_post_run(
+            [{"status": 200, "payload": {"data": {"task_id": "mj_task_1"}}}]
+        )
+        self.assertEqual(len(posts), 1)
+        url, body = posts[0]
+        self.assertEqual(url, "https://api.apimart.ai/v1/midjourney/generations")
+        self.assertEqual(body["model"], "midjourney")
+        self.assertEqual(body["size"], "1:1")
+        self.assertNotIn("resolution", body)
+        self.assertNotIn("official_fallback", body)
+        self.assertNotIn("n", body)
+        self.assertIsNone(result[0])
+        self.assertEqual(main.extract_task_id(result[1]), "mj_task_1")
+
+    def test_midjourney_retries_get_channel_failed(self):
+        self.model = "midjourney"
+        async def _noop_sleep(*args, **kwargs):
+            return None
+
+        with patch.object(main.asyncio, "sleep", new=_noop_sleep):
+            posts, _result = self._fake_post_run(
+                [
+                    {"status": 500, "text": '{"error":{"code":"get_channel_failed","message":"Please wait and try again later."}}'},
+                    {"status": 500, "text": '{"error":{"code":"get_channel_failed","message":"Please wait and try again later."}}'},
+                    {"status": 200, "payload": {"data": {"task_id": "mj_task_2"}}},
+                ]
+            )
+        self.assertEqual(len(posts), 3)
+        self.assertTrue(all(url == "https://api.apimart.ai/v1/midjourney/generations" for url, _ in posts))
+
+    def test_other_apimart_models_still_use_generic_endpoint(self):
+        self.model = "gpt-image-2"
+        posts, _result = self._fake_post_run(
+            [{"status": 200, "payload": {"data": [{"url": "https://example.com/img.png"}]}}]
+        )
+        self.assertEqual(len(posts), 1)
+        url, body = posts[0]
+        self.assertEqual(url, "https://api.apimart.ai/v1/images/generations")
+        self.assertEqual(body["model"], "gpt-image-2")
+
+    def test_get_channel_failed_has_friendly_message(self):
+        detail = main.friendly_image_error_detail(
+            '{"error":{"code":"get_channel_failed","message":"Please wait and try again later."}}',
+            "1:1",
+            "midjourney",
+        )
+        self.assertIn("get_channel_failed", detail)
+        self.assertIn("稍后重试", detail)
+
+
 if __name__ == "__main__":
     unittest.main()
