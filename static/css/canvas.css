@@ -671,12 +671,14 @@ input[type=range].canvas-range::-webkit-slider-runnable-track { height:3px; bord
 .output-recover-query:hover:not(:disabled) { background:var(--soft-2); }
 .output-recover-query:disabled { opacity:.55; cursor:default; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.port { position:absolute; top:50%; width:44px; height:44px; border-radius:50%; cursor:crosshair; transform:translateY(-50%); z-index:3; }
+.port { position:absolute; top:50%; width:44px; height:44px; border-radius:50%; cursor:crosshair; transform:translateY(-50%) translateX(var(--port-hide-x, 0)) scale(.88); z-index:3; opacity:0; pointer-events:none; transition:opacity .15s ease, transform .15s ease; }
 .port::after { content:""; position:absolute; left:15px; top:15px; width:14px; height:14px; border-radius:50%; border:2px solid #fff; background:#111827; box-shadow:0 0 0 1px #94a3b8; transition:transform .14s var(--ease); }
 .port:hover::after { transform:scale(1.25); }
-.port.in { left:-29px; cursor:crosshair; }
-.port.out { right:-15px; }
+.port.in { left:-29px; --port-hide-x:10px; cursor:crosshair; }
+.port.out { right:-15px; --port-hide-x:-10px; }
 .node > .port { top:50%; }
+/* 左右加号只在悬停节点时滑出（节点 + 加号视为同一 hover 区域，加号是节点子元素，悬停加号时 :hover 仍生效） */
+.node:hover > .port { opacity:1; pointer-events:auto; transform:translateY(-50%) translateX(0) scale(1); transition:opacity .18s ease, transform .18s cubic-bezier(.2,.8,.2,1); }
 .ltxDirector-node > .port,
 .ltx-director-node > .port { top:50%; }
 .node.sized.comfy-node > .port,
