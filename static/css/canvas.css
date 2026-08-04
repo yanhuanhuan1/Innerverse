@@ -2996,5 +2996,18 @@ body.studio-theme-dark .shell .node.sized.video-node {
     animation:spin 1s linear infinite;
 }
 
-/* 画布无节点时的背景提示 */
-.canvas-empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:5; pointer-events:none; color:rgba(148,163,184,.8); font-size:18px; font-weight:750; letter-spacing:.12em; user-select:none; text-shadow:0 2px 12px rgba(15,23,42,.12); }
+/* 画布无节点时的背景提示（ShinyText 特效：2s 循环） */
+.canvas-empty-hint {
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:5; pointer-events:none;
+    display:inline-block; color:#b5b5b5; font-size:18px; font-weight:750; letter-spacing:.12em; user-select:none;
+    background-image:linear-gradient(120deg, #b5b5b5 0%, #b5b5b5 35%, #ffffff 50%, #b5b5b5 65%, #b5b5b5 100%);
+    background-size:200% auto;
+    -webkit-background-clip:text;
+    background-clip:text;
+    -webkit-text-fill-color:transparent;
+    animation:canvasShinyText 2s linear infinite;
+}
+@keyframes canvasShinyText {
+    from { background-position:150% center; }
+    to { background-position:-50% center; }
+}
