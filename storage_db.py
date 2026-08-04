@@ -8,6 +8,12 @@ but persist to Postgres in production where the filesystem is ephemeral.
 
 Falls back to `is_configured() == False` when DATABASE_URL is not set, so
 callers should always check that first and use the local-file path instead.
+
+连接策略：
+- `_connect()` 会把连接缓存到模块级 `_conn`，同一个函数实例内复用，不会每次请求重连；
+- 支持 Neon pooled connection：直接把 Neon 控制台的 "Pooled connection"
+  （pgBouncer，主机名带 `-pooler`）字符串配置到 `DATABASE_URL` 即可，代码无需区分；
+- 连接失败时保留现有降级（local-file）与调用方重试逻辑，不会抛出致命错误。
 """
 import os
 import json

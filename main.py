@@ -445,6 +445,9 @@ def session_user_from_request(request: Request):
 # Auth v2 uses email accounts as the primary login method. Email-code
 # verification remains only as a fallback for accounts without a password.
 def require_current_user(request: Request):
+    # 仅本地开发调试用：设置 DEV_AUTH_BYPASS=1 时放行固定测试用户，生产环境（Vercel/Serverless）强制关闭。
+    if os.getenv("DEV_AUTH_BYPASS") == "1" and not SERVERLESS_RUNTIME and not IS_VERCEL:
+        return {"id": "dev-user", "email": "dev@local.test", "provider": "dev", "nickname": "Dev User", "avatar_url": ""}
     if not auth_is_configured():
         raise HTTPException(status_code=503, detail="登录尚未配置")
     user = session_user_from_request(request)
@@ -1709,7 +1712,7 @@ async def static_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     try:
-        if path.startswith("/static/") and "v=" in request.url.query:
+        if path.startswith("/static/") and "v=" in request.url.query and not path.endswith(".html"):
             response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
         elif path.startswith(("/assets/", "/output/")):
             response.headers.setdefault("Cache-Control", "public, max-age=86400")
@@ -16509,6 +16512,8 @@ async def send_resend_login_code(email: str, code: str):
 
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
+    if os.getenv("DEV_AUTH_BYPASS") == "1" and not SERVERLESS_RUNTIME and not IS_VERCEL:
+        return {"user": {"id": "dev-user", "email": "dev@local.test", "provider": "dev", "nickname": "Dev User", "avatar_url": ""}}
     user = session_user_from_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="请先登录")

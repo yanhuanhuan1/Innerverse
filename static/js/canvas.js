@@ -1357,6 +1357,20 @@ function hideCanvasBoot(){
         setTimeout(() => boot.remove(), 400);
     }
 }
+let ltxTimelineLibPromise = null;
+function ensureLtxTimelineLib(){
+    if(window.CanvasLTXTimelineEditor) return Promise.resolve(true);
+    if(!ltxTimelineLibPromise){
+        ltxTimelineLibPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = '/static/js/ltx-director-timeline.js?v=2026.07.23.1784878252';
+            script.onload = () => resolve(true);
+            script.onerror = () => { ltxTimelineLibPromise = null; reject(new Error('ltx timeline lib load failed')); };
+            document.head.appendChild(script);
+        });
+    }
+    return ltxTimelineLibPromise;
+}
 let generationCompleteSoundAt = 0;
 function playGenerationCompleteSound(){
     const now = Date.now();
@@ -2472,6 +2486,9 @@ async function openCanvas(id){
         migrateInlineGeneratedOutputNodes();
         const migratedInlineOutputs = consumeInlineOutputMigrationChanged();
         pruneMissingComfyWorkflows();
+        if(nodes.some(n => n.type === 'ltxDirector')){
+            await ensureLtxTimelineLib().catch(() => {});
+        }
         selected.clear();
         markPerf('canvas_render_start');
         setCanvasMode(true);
@@ -2987,6 +3004,9 @@ function addNode(node){
     mountNodeElement(node);
     refreshCanvasAfterNodeDomChange(nodesEl);
     scheduleSave();
+    if(node.type === 'ltxDirector'){
+        ensureLtxTimelineLib().then(() => { try { refreshNodes([node.id]); } catch(e) {} }).catch(() => {});
+    }
     return node;
 }
 function defaultPoint(dx=0, dy=0){ return screenToWorld(window.innerWidth / 2 + dx, window.innerHeight / 2 + dy); }

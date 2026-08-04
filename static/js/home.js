@@ -556,6 +556,100 @@ function canvasUrl(canvas, opts={}){
     return `/static/canvas.html?${params.toString()}`;
 }
 
+// ===== 画布预加载：悬停/聚焦时预热静态资源与画布数据，点击跳转不等待预取 =====
+const canvasPrefetch = {
+    inflight: new Set(),
+    done: new Set(),
+    assetsDone: new Set(),
+    controllers: new Map(),
+    timers: new Map(),
+    queue: [],
+    active: 0,
+    limit: 2
+};
+const CANVAS_PREFETCH_DELAY = 90;
+function canvasPrefetchAssets(id){
+    if(!id || canvasPrefetch.assetsDone.has(id)) return;
+    const canvas = latestCanvasInProject(id);
+    if(!canvas) return;
+    canvasPrefetch.assetsDone.add(id);
+    const add = (href, as) => {
+        try {
+            const link = document.createElement('link');
+            link.rel = 'prefetch';
+            link.href = href;
+            if(as) link.as = as;
+            document.head.appendChild(link);
+            setTimeout(() => { try { link.remove(); } catch(e){} }, 15000);
+        } catch(e) {}
+    };
+    add(canvasUrl(canvas), 'document');
+    add('/static/css/canvas.css?v=2026.08.04.perf1', 'style');
+    add('/static/css/canvas-tailwind.css?v=2026.08.04.perf1', 'style');
+    add('/static/js/canvas.js?v=2026.08.04.perf1', 'script');
+    add('/static/js/lucide.js?v=2026.07.23.1784878252', 'script');
+    add('/static/vendor/fonts/inter-2.ttf', 'font');
+    add('/static/vendor/fonts/inter-4.ttf', 'font');
+}
+function canvasPrefetchPump(){
+    while(canvasPrefetch.active < canvasPrefetch.limit && canvasPrefetch.queue.length){
+        const id = canvasPrefetch.queue.shift();
+        if(canvasPrefetch.done.has(id) || canvasPrefetch.inflight.has(id)) continue;
+        canvasPrefetchStart(id);
+    }
+}
+function canvasPrefetchStart(id){
+    const canvas = latestCanvasInProject(id);
+    if(!canvas || canvasPrefetch.inflight.has(id) || canvasPrefetch.done.has(id)) return;
+    canvasPrefetch.inflight.add(id);
+    canvasPrefetch.active++;
+    const controller = new AbortController();
+    canvasPrefetch.controllers.set(id, controller);
+    fetch(`/api/canvases/${encodeURIComponent(canvas.id)}`, {credentials:'same-origin', cache:'default', signal: controller.signal})
+        .then(res => { if(res.ok){ canvasPrefetch.done.add(id); try { res.json(); } catch(e){} } })
+        .catch(() => {})
+        .finally(() => {
+            canvasPrefetch.inflight.delete(id);
+            canvasPrefetch.controllers.delete(id);
+            canvasPrefetch.active = Math.max(0, canvasPrefetch.active - 1);
+            canvasPrefetchPump();
+        });
+}
+function canvasPrefetchRequest(id){
+    canvasPrefetchAssets(id);
+    if(!id || canvasPrefetch.inflight.has(id) || canvasPrefetch.done.has(id)) return;
+    if(canvasPrefetch.active >= canvasPrefetch.limit){
+        if(!canvasPrefetch.queue.includes(id)) canvasPrefetch.queue.push(id);
+        return;
+    }
+    canvasPrefetchStart(id);
+}
+function canvasPrefetchCancel(id){
+    const controller = canvasPrefetch.controllers.get(id);
+    if(controller) { try { controller.abort(); } catch(e){} }
+    canvasPrefetch.inflight.delete(id);
+    canvasPrefetch.controllers.delete(id);
+}
+function bindCanvasPrefetch(card, id){
+    const schedule = () => {
+        clearTimeout(canvasPrefetch.timers.get(id));
+        canvasPrefetch.timers.set(id, setTimeout(() => canvasPrefetchRequest(id), CANVAS_PREFETCH_DELAY));
+    };
+    const cancel = () => {
+        const timer = canvasPrefetch.timers.get(id);
+        if(timer){ clearTimeout(timer); canvasPrefetch.timers.delete(id); }
+        canvasPrefetchCancel(id);
+    };
+    card.addEventListener('mouseenter', schedule);
+    card.addEventListener('focus', schedule);
+    card.addEventListener('touchstart', schedule, {passive:true});
+    // 指针按下意味着马上要点击跳转：取消待触发的预取，避免与正式打开竞争。
+    card.addEventListener('pointerdown', () => { clearTimeout(canvasPrefetch.timers.get(id)); canvasPrefetch.timers.delete(id); });
+    card.addEventListener('mouseleave', cancel);
+    card.addEventListener('blur', cancel);
+    card.addEventListener('click', () => { clearTimeout(canvasPrefetch.timers.get(id)); canvasPrefetch.timers.delete(id); });
+}
+
 function openCanvas(canvas){
     if(!canvas?.id) return;
     try {
@@ -832,6 +926,7 @@ function renderRecent(){
     recentGrid.innerHTML = cards.join('');
     recentGrid.querySelector('[data-new-canvas]')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
     recentGrid.querySelectorAll('[data-project-open]').forEach(card => {
+        bindCanvasPrefetch(card, card.dataset.projectOpen || '');
         card.addEventListener('click', event => {
             if(event.target.closest('button,[data-project-popover],input')) return;
             openProjectCanvas(card.dataset.projectOpen || '');

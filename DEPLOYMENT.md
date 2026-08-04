@@ -132,6 +132,18 @@ Vercel Functions have an ephemeral filesystem. Runtime canvas data and uploaded 
 
 Vercel Functions 的文件系统是临时的。生产环境如需长期保存画布、素材和生成记录，下一阶段建议接入对象存储和数据库，例如 Vercel Blob、S3-compatible storage、Postgres 或 Redis。
 
+## Database Connection (Vercel + Neon)
+
+画布数据存储在 Postgres（生产推荐 Neon）的 `kv_documents` 表中。连接策略：
+
+1. **Vercel 环境变量 `DATABASE_URL` 必须使用 Neon 的 "Pooled connection"**
+   （pgBouncer，主机名带 `-pooler` 的字符串），而不是直连地址。代码无需区分，
+   连接字符串决定走池化还是直连。
+2. 代码在同一个函数实例内会复用数据库连接（模块级缓存），不会每次请求重新建连；
+   但 Vercel 冷启动的新实例仍会建立一次新连接，因此池化 + 保活缺一不可。
+3. 数据库连接失败时会自动降级到本地文件存储路径，已有重试逻辑保持不变。
+4. 不要在任何配置里硬编码连接字符串或密钥；通过 Vercel 环境变量注入。
+
 ## Keeping the Database Warm
 
 If your Postgres provider pauses idle compute (Neon free tier pauses after ~5
