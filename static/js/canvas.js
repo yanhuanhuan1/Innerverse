@@ -11959,7 +11959,9 @@ function missingAssetHtml(url, compact=false){
 }
 function outputMetaFor(url, out){
     const item = (out?.images || []).find(x => outputUrlValue(x) === url);
-    return item && typeof item === 'object' ? item : {};
+    if(item && typeof item === 'object') return item;
+    const gen = (out?.generatedOutputs || []).find(x => outputUrlValue(x) === url);
+    return gen && typeof gen === 'object' ? gen : {};
 }
 function runSnapshot(node, prompt, refs=[]){
     const clone = JSON.parse(JSON.stringify(node || {}));

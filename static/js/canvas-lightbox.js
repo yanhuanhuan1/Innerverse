@@ -106,6 +106,11 @@ function openOutputLightbox(url, out){
                 ? `${outputLightboxVideo.videoWidth} x ${outputLightboxVideo.videoHeight}`
                 : 'Video', meta);
         };
+        outputLightboxVideo.onerror = () => {
+            outputResolutionText(langIsEn()
+                ? 'Video failed to load. The file may be missing or expired.'
+                : '视频加载失败，文件可能已丢失或已过期。', meta);
+        };
         outputLightboxVideo.src = canvasDisplayMediaUrl(url, outputDownloadName(url));
         outputPreview.ondblclick = null;
         outputDownloadBtn.onclick = e => {
@@ -131,6 +136,12 @@ function openOutputLightbox(url, out){
         outputResolutionText(`${w} x ${h}${outputSizeText ? ` · ${outputSizeText}` : ''}`, meta);
     };
     outputLightboxImg.onload = () => applyOutputResolution();
+    outputLightboxImg.onerror = () => {
+        outputResolutionText(langIsEn()
+            ? 'Image failed to load. The file may be missing or expired.'
+            : '图片加载失败，文件可能已丢失或已过期。', meta);
+    };
+    outputLightboxImg.alt = langIsEn() ? 'output preview' : '输出预览';
     fetch(canvasDisplayMediaUrl(url, outputDownloadName(url)), {method:'HEAD'})
         .then(res => {
             const bytes = Number(res.headers.get('content-length'));
