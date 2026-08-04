@@ -295,6 +295,7 @@
         "canvas.deleteLink": { zh: "删除连线", en: "Delete link" },
         "canvas.download": { zh: "下载", en: "Download" },
         "canvas.enlarge": { zh: "放大", en: "Enlarge" },
+        "canvas.fullscreen": { zh: "全屏查看", en: "Fullscreen" },
         "canvas.emptyCanvasHint": { zh: "双击画布自由生成", en: "Double-click the canvas to create" },
         "canvas.arrangeSelected": { zh: "整理选中", en: "Arrange" },
         "canvas.comfyModeText": { zh: "文生图", en: "Text to Image" },

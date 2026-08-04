@@ -6515,7 +6515,7 @@ function renderNode(node){
         if(isNodeControl(e.target)) return;
         collapseOpenComposerPanels(node.id);
         const alreadySelected = selected.has(node.id);
-        if(!e.ctrlKey && !e.metaKey && alreadySelected && hubTargetId === node.id && selectionHub?.classList.contains('open')){
+        if(!e.ctrlKey && !e.metaKey && alreadySelected && hubTargetId === node.id && selectionHub?.classList.contains('open') && hubOpenPendingNodeId !== node.id){
             // 再次点击当前节点：顶部操作栏平滑收起
             closeSelectionHub();
             refreshSelectionVisuals();
@@ -6759,13 +6759,6 @@ function bindOutputWrap(wrap, node){
     const playBtn = wrap.querySelector('.canvas-video-play');
     const del = wrap.querySelector('.output-del');
     const recoverQuery = wrap.querySelector('.output-recover-query');
-    const zoomBtn = wrap.querySelector('.output-zoom');
-    if(zoomBtn){
-        zoomBtn.onclick = e => {
-            e.stopPropagation();
-            openOutputLightbox(wrap.dataset.outputUrl, node);
-        };
-    }
     if(img){
         // 预览图不参与原生拖拽：从图像上按下并拖动应移动整个节点框，而不是拖动图像本身。
         // 点击生成图不再单独处理：与点击节点其它区域一致（冒泡到节点/舞台的点击逻辑）。
@@ -9315,8 +9308,12 @@ function bindCanvasInputPanelToggle(wrap, node){
         event.stopPropagation();
         closeCreateMenu();
         if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+        const wasSelected = selected.has(node.id);
         selected.clear();
         selected.add(node.id);
+        // 本次点击（舞台 mousedown）刚选中该节点时，标记为“由本次点击打开”，
+        // 避免同一个点击冒泡到 el.onclick 时被当成“再次点击”而把操作栏立刻收起。
+        if(!wasSelected) hubOpenPendingNodeId = node.id;
         refreshSelectionVisuals();
         const start = {
             x:event.clientX,
@@ -14177,7 +14174,7 @@ function renderOutputMedia(item, useGridLayout=false){
         const label = kind === 'text' ? 'TEXT' : 'FILE';
         return `<div class="output-img-wrap output-file-wrap" data-output-url="${safe}"${gridStyle}><div class="output-file-card"><i data-lucide="${icon}" class="w-7 h-7"></i><span>${escapeHtml(meta.name || outputImageName(url))}</span><small>${label}</small></div>${timePill}<button class="output-del" title="${tr('common.delete')}">×</button></div>`;
     }
-    return `<div class="output-img-wrap" data-output-url="${safe}"${gridStyle}>${canvasPreviewImgHtml(url, useGridLayout ? 512 : 768, 'alt="generated output"')}${timePill}<button class="output-zoom" type="button" title="${escapeHtml(tr('canvas.enlarge'))}"><i data-lucide="zoom-in"></i></button><button class="output-del" title="${tr('common.delete')}">×</button></div>`;
+    return `<div class="output-img-wrap" data-output-url="${safe}"${gridStyle}>${canvasPreviewImgHtml(url, useGridLayout ? 512 : 768, 'alt="generated output"')}${timePill}<button class="output-del" title="${tr('common.delete')}">×</button></div>`;
 }
 function outputGridLayout(node){
     const images = node?.images || [];
@@ -15111,10 +15108,34 @@ function finishSelection(){
 }
 let hubTargetId = '';
 let hubTimer = 0;
-function selectionHubHtml(){
+let hubOpenPendingNodeId = '';
+function nodeOutputMediaUrls(node){
+    if(!node) return [];
+    const seen = new Set();
+    const urls = [];
+    const add = item => {
+        const url = outputUrlValue(item);
+        if(!url || seen.has(url) || isMissingAssetUrl(url)) return;
+        const kind = mediaKindForOutputItem(item && typeof item === 'object' ? {...item, url} : url);
+        if(!['image','video'].includes(kind)) return;
+        seen.add(url);
+        urls.push({url, kind});
+    };
+    inlineGeneratedOutputItems(node).forEach(add);
+    (node.images || []).forEach(add);
+    if(node.type === 'group') groupImageItems(node).forEach(add);
+    if(node.url && ['image','video'].includes(mediaKindForNode(node))) add({url:node.url, kind:mediaKindForNode(node)});
+    return urls;
+}
+function selectionHubHtml(node){
+    const media = nodeOutputMediaUrls(node);
+    const mediaButtons = media.length ? `
+        <button type="button" class="hub-btn" data-hub-action="fullscreen" title="${escapeHtml(tr('canvas.fullscreen'))}"><i data-lucide="maximize" class="w-4 h-4"></i><span>${escapeHtml(tr('canvas.fullscreen'))}</span></button>
+        <button type="button" class="hub-btn" data-hub-action="download" title="${escapeHtml(tr('canvas.download'))}"><i data-lucide="download" class="w-4 h-4"></i><span>${escapeHtml(tr('canvas.download'))}</span></button>
+    ` : '';
     return `
+        ${mediaButtons}
         <button type="button" class="hub-btn danger" data-hub-action="delete" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2" class="w-4 h-4"></i><span>${escapeHtml(tr('common.delete'))}</span></button>
-        <button type="button" class="hub-btn" data-hub-action="arrange" title="${escapeHtml(tr('canvas.arrangeSelected'))}"><i data-lucide="layout-grid" class="w-4 h-4"></i><span>${escapeHtml(tr('canvas.arrangeSelected'))}</span></button>
     `;
 }
 function positionSelectionHub(node){
@@ -15151,7 +15172,7 @@ function showSelectionHub(node){
             // 快速连点时目标可能已切换：只弹出仍是当前目标的节点
             if(hubTargetId !== node.id) return;
             selectionHub.classList.remove('closing');
-            selectionHub.innerHTML = selectionHubHtml();
+            selectionHub.innerHTML = selectionHubHtml(node);
             positionSelectionHub(node);
             void selectionHub.offsetWidth;
             selectionHub.classList.add('open');
@@ -15160,7 +15181,7 @@ function showSelectionHub(node){
         return;
     }
     hubTargetId = node.id;
-    selectionHub.innerHTML = selectionHubHtml();
+    selectionHub.innerHTML = selectionHubHtml(node);
     positionSelectionHub(node);
     void selectionHub.offsetWidth;
     selectionHub.classList.add('open');
@@ -15193,7 +15214,16 @@ function bindSelectionHubEvents(){
         const btn = e.target.closest('[data-hub-action]');
         if(!btn) return;
         if(btn.dataset.hubAction === 'delete') deleteSelectedNodes();
-        else if(btn.dataset.hubAction === 'arrange') arrangeSelectedCanvasNodes();
+        else if(btn.dataset.hubAction === 'fullscreen'){
+            const node = nodes.find(n => n.id === hubTargetId);
+            const media = nodeOutputMediaUrls(node);
+            if(media.length) openOutputLightbox(media[0].url, node);
+        }
+        else if(btn.dataset.hubAction === 'download'){
+            const node = nodes.find(n => n.id === hubTargetId);
+            const media = nodeOutputMediaUrls(node);
+            if(media.length) downloadUrl(media[0].url, outputDownloadName(media[0].url));
+        }
     });
 }
 function startSelectionLink(e, kind){
