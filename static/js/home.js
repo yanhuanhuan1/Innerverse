@@ -281,6 +281,39 @@ function focusHeroSection(){
     } catch(e) {}
 }
 
+function isHomeWheelInteractiveTarget(target){
+    return Boolean(target?.closest?.('textarea,input,select,.auth-modal,.user-menu,.project-options-popover,.project-delete-confirm'));
+}
+
+function syncHomeFocusFromScroll(){
+    const target = document.getElementById('recentSection');
+    if(!target) return;
+    const threshold = Math.max(120, target.offsetTop * 0.45);
+    const next = window.scrollY >= threshold ? 'projects' : 'hero';
+    if(next === homeFocus) return;
+    homeFocus = next;
+    try {
+        if(window.parent && window.parent !== window) {
+            window.parent.postMessage({type:'home:section-focus', section:next === 'projects' ? 'projects' : 'home'}, window.location.origin);
+        }
+    } catch(e) {}
+}
+
+function handleHomeWheel(event){
+    if(isHomeWheelInteractiveTarget(event.target)) return;
+    const now = Date.now();
+    if(now - homeWheelGate < 650) return;
+    if(event.deltaY > 28 && homeFocus !== 'projects') {
+        event.preventDefault();
+        homeWheelGate = now;
+        focusProjectsSection();
+    } else if(event.deltaY < -28 && homeFocus === 'projects' && window.scrollY <= (document.getElementById('recentSection')?.offsetTop || 0) + 80) {
+        event.preventDefault();
+        homeWheelGate = now;
+        focusHeroSection();
+    }
+}
+
 function handleHostMessage(event){
     if(event.origin && event.origin !== location.origin) return;
     const data = event.data || {};
@@ -1339,6 +1372,8 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
     if(e.key === 'Escape') toggleUserMenu(false);
 });
+window.addEventListener('wheel', handleHomeWheel, {passive:false});
+window.addEventListener('scroll', syncHomeFocusFromScroll, {passive:true});
 homeThemeBtn?.addEventListener('click', () => { toggleHomeTheme(); toggleUserMenu(false); });
 homeLanguageBtn?.addEventListener('click', () => { toggleHomeLanguage(); toggleUserMenu(false); });
 homeLogoutBtn?.addEventListener('click', () => { logout(); toggleUserMenu(false); });
