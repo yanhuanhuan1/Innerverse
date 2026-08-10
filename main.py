@@ -86,6 +86,26 @@ logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 
 app = FastAPI()
 
+LEGACY_PROVIDER_API_PREFIXES = (
+    "/api/runninghub",
+    "/api/jimeng",
+    "/api/codex",
+    "/api/gemini-cli",
+)
+
+
+@app.middleware("http")
+async def block_legacy_provider_apis(request: Request, call_next):
+    path = request.url.path.rstrip("/")
+    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in LEGACY_PROVIDER_API_PREFIXES):
+        return JSONResponse(
+            status_code=410,
+            content={
+                "detail": "Legacy provider APIs have been removed. Innerverse now uses APIMart as the only generation provider."
+            },
+        )
+    return await call_next(request)
+
 def parse_allowed_origins(value: str = ""):
     """Parse a comma-separated CORS origin list; fall back to local dev origins."""
     origins = [item.strip().rstrip("/") for item in str(value or "").split(",") if item.strip()]
@@ -556,7 +576,7 @@ JIMENG_LOGIN_SESSION = {
 }
 
 PROVIDER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,40}$")
-SUPPORTED_PROVIDER_PROTOCOLS = {"openai", "apimart", "gemini", "grok", "gemini-cli", "volcengine", "runninghub", "jimeng", "codex"}
+SUPPORTED_PROVIDER_PROTOCOLS = {"apimart"}
 SUPPORTED_IMAGE_REQUEST_MODES = {"openai", "openai-json", "openai-video-proxy", "openai-responses", "openai-async-image"}
 RUNNINGHUB_DEFAULT_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
@@ -1024,24 +1044,10 @@ VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3-fast", [
 ])
 
 def provider_key_env(provider_id):
-    if provider_id == "comfly":
-        return "COMFLY_API_KEY"
-    if provider_id == "modelscope":
-        return "MODELSCOPE_API_KEY"
-    if provider_id == "runninghub":
-        return "RUNNINGHUB_API_KEY"
-    if provider_id == "volcengine":
-        return "ARK_API_KEY"
-    if provider_id == "apimart":
-        return "APIMART_API_KEY"
-    return f"API_PROVIDER_{re.sub(r'[^A-Za-z0-9]', '_', provider_id).upper()}_KEY"
+    return "APIMART_API_KEY"
 
 def provider_key_env_aliases(provider_id):
-    provider_id = str(provider_id or "").strip().lower()
-    aliases = [provider_key_env(provider_id)]
-    if provider_id == "apimart":
-        aliases.append("API_PROVIDER_APIMART_KEY")
-    return list(dict.fromkeys([item for item in aliases if item]))
+    return ["APIMART_API_KEY", "API_PROVIDER_APIMART_KEY"]
 
 def runninghub_wallet_key_env():
     return "RUNNINGHUB_WALLET_API_KEY"
@@ -1070,13 +1076,10 @@ def read_api_env_value(key: str) -> str:
     return ""
 
 def provider_env_key_value(provider_id: str) -> str:
-    provider_id = str(provider_id or "").strip().lower()
-    for env_key in provider_key_env_aliases(provider_id):
+    for env_key in provider_key_env_aliases("apimart"):
         key = os.getenv(env_key, "") or read_api_env_value(env_key)
         if key:
             return key
-    if provider_id == "modelscope":
-        return MODELSCOPE_API_KEY or ""
     return ""
 
 def runninghub_wallet_key_value() -> str:
@@ -1531,6 +1534,31 @@ def normalize_provider(item):
         "volcengine_region": volc_region,
     }
 
+def normalize_provider(item):
+    item = item if isinstance(item, dict) else {}
+    base_url = str(item.get("base_url") or APIMART_DEFAULT_BASE_URL).strip().rstrip("/")
+    if base_url and not re.match(r"^https?://", base_url):
+        raise HTTPException(status_code=400, detail="APIMart Base URL must start with http:// or https://")
+    return {
+        "id": "apimart",
+        "name": "APIMart",
+        "base_url": base_url or APIMART_DEFAULT_BASE_URL,
+        "protocol": "apimart",
+        "image_request_mode": normalize_image_request_mode(item.get("image_request_mode") or "openai"),
+        "image_generation_endpoint": normalize_endpoint_override(item.get("image_generation_endpoint"), "image generation endpoint"),
+        "image_edit_endpoint": normalize_endpoint_override(item.get("image_edit_endpoint"), "image edit endpoint"),
+        "enabled": True,
+        "primary": True,
+        "image_models": model_list_from_values([*(item.get("image_models") or []), *APIMART_DEFAULT_IMAGE_MODELS]),
+        "chat_models": model_list_from_values([*(item.get("chat_models") or []), *APIMART_DEFAULT_CHAT_MODELS]),
+        "video_models": model_list_from_values([*(item.get("video_models") or []), *APIMART_DEFAULT_VIDEO_MODELS]),
+        "model_names": normalize_model_name_map(item.get("model_names")),
+        "model_protocols": normalize_model_protocols(item.get("model_protocols")),
+        "ms_loras": [],
+        "ms_defaults_version": 0,
+    }
+
+
 def load_api_providers():
     defaults = default_api_providers()
     if not os.path.exists(API_PROVIDERS_FILE):
@@ -1538,7 +1566,8 @@ def load_api_providers():
     try:
         with open(API_PROVIDERS_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        providers = [normalize_provider(item) for item in raw if isinstance(item, dict)]
+        raw_items = [raw] if isinstance(raw, dict) else raw if isinstance(raw, list) else []
+        providers = [normalize_provider(item) for item in raw_items if isinstance(item, dict)]
         return merge_default_api_providers(providers or defaults, inject_missing=not bool(providers))
     except Exception as e:
         logger.info(f"加载 API 平台配置失败: {e}")
@@ -1621,6 +1650,35 @@ def get_api_provider_exact(provider_id: str):
     if not provider.get("enabled", True):
         raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
     return provider
+
+def public_provider(provider):
+    provider = normalize_provider(provider)
+    key = provider_env_key_value("apimart")
+    return {
+        **provider,
+        "has_key": bool(key),
+        "key_preview": mask_secret(key),
+        "key_env": "APIMART_API_KEY",
+    }
+
+
+def get_primary_provider_id(providers=None):
+    return "apimart"
+
+
+def get_api_provider(provider_id="apimart"):
+    provider = next((p for p in load_api_providers() if p.get("id") == "apimart"), None)
+    if not provider:
+        raise HTTPException(status_code=400, detail="APIMart provider is not configured")
+    return provider
+
+
+def get_api_provider_exact(provider_id: str):
+    target = str(provider_id or "apimart").strip().lower()
+    if target != "apimart":
+        raise HTTPException(status_code=410, detail="Only APIMart is supported as a generation provider.")
+    return get_api_provider("apimart")
+
 
 def modelscope_provider_config():
     return get_api_provider_exact("modelscope")
@@ -13318,7 +13376,6 @@ async def import_local_ai_reference(payload: LocalImageImportRequest, request: R
         raise HTTPException(status_code=400, detail="没有可导入的本地图片")
     return {"files": [import_local_image_file(normalize_local_image_path(path)) for path in requested]}
 
-@app.get("/api/runninghub/app-info")
 async def runninghub_app_info(webappId: str = ""):
     webapp_id = str(webappId or "").strip()
     if not webapp_id:
@@ -13341,7 +13398,6 @@ async def runninghub_app_info(webappId: str = ""):
     data = raw.get("data") if isinstance(raw, dict) else {}
     return {"success": True, "data": data or {}}
 
-@app.post("/api/runninghub/submit")
 async def runninghub_submit(payload: RunningHubSubmitRequest):
     webapp_id = str(payload.webappId or "").strip()
     if not webapp_id:
@@ -13372,7 +13428,6 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
 
-@app.post("/api/runninghub/workflow-submit")
 async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
     workflow_id = str(payload.workflowId or "").strip()
     if not workflow_id:
@@ -13408,7 +13463,6 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 工作流提交失败：{raw}")
 
-@app.get("/api/runninghub/workflow-info")
 async def runninghub_workflow_info(workflowId: str = ""):
     workflow_id = str(workflowId or "").strip()
     if not workflow_id:
@@ -13440,7 +13494,6 @@ async def runninghub_workflow_info(workflowId: str = ""):
     node_info_list = runninghub_workflow_node_info_list(workflow_json)
     return {"success": True, "data": {"workflowId": workflow_id, "nodeInfoList": node_info_list, "raw": raw}}
 
-@app.get("/api/runninghub/workflows")
 def list_runninghub_workflows():
     providers = load_api_providers()
     hidden_ids = runninghub_saved_hidden_workflow_ids()
@@ -13481,7 +13534,6 @@ def list_runninghub_workflows():
     items.sort(key=lambda item: item["title"])
     return {"workflows": items}
 
-@app.get("/api/runninghub/workflows/{workflow_id:path}")
 def get_runninghub_workflow(workflow_id: str):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
@@ -13495,7 +13547,6 @@ def get_runninghub_workflow(workflow_id: str):
         raise HTTPException(status_code=404, detail="RunningHub 工作流未找到")
     return {"workflow": cfg}
 
-@app.post("/api/runninghub/workflows/fetch")
 async def fetch_runninghub_workflow(payload: RunningHubWorkflowConfig):
     workflow_id = runninghub_workflow_store_key(payload.workflowId)
     if not workflow_id:
@@ -13568,7 +13619,6 @@ def delete_runninghub_workflow(workflow_id: str):
     remove_runninghub_workflow_from_provider(key)
     return {"success": True}
 
-@app.get("/api/runninghub/query")
 async def runninghub_query(taskId: str = "", useWallet: bool = False):
     task_id = str(taskId or "").strip()
     if not task_id:
@@ -13607,7 +13657,6 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False):
             status = "UNKNOWN"
         return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
 
-@app.post("/api/runninghub/upload-asset")
 async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
     source_url = rewrite_runninghub_file_url(str(payload.url or "").strip())
     if not source_url:
@@ -13649,7 +13698,6 @@ async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
         return {"success": True, "data": {"fileName": raw["data"]["fileName"], "fileType": raw["data"].get("fileType") or content_type}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 上传失败：{raw}")
 
-@app.get("/api/codex/status")
 async def codex_status():
     exe = codex_cli_executable()
     image2_exe = gpt_image_2_skill_executable()
@@ -13693,7 +13741,6 @@ async def codex_status():
             "message": f"Codex CLI 检测失败：{exc}",
         }
 
-@app.post("/api/codex/help")
 async def codex_help(payload: CodexHelpRequest):
     exe = codex_cli_executable()
     if not exe:
@@ -13718,7 +13765,6 @@ async def codex_help(payload: CodexHelpRequest):
         raise HTTPException(status_code=502, detail=(err_text or out_text or f"exit={proc.returncode}")[:1000])
     return {"text": out_text or err_text, "raw": {"stdout": out_text, "stderr": err_text}}
 
-@app.get("/api/gemini-cli/status")
 async def gemini_cli_status():
     exe = gemini_cli_executable()
     display_name = gemini_cli_display_name(exe)
@@ -13759,7 +13805,6 @@ async def gemini_cli_status():
             "message": f"{display_name} 检测失败：{exc}",
         }
 
-@app.post("/api/gemini-cli/help")
 async def gemini_cli_help(payload: GeminiCliHelpRequest):
     exe = gemini_cli_executable()
     if not exe:
@@ -13785,7 +13830,6 @@ async def gemini_cli_help(payload: GeminiCliHelpRequest):
         raise HTTPException(status_code=502, detail=(err_text or out_text or f"exit={proc.returncode}")[:1000])
     return {"text": out_text or err_text, "raw": {"stdout": out_text, "stderr": err_text}}
 
-@app.get("/api/jimeng/status")
 async def jimeng_status():
     exe = jimeng_cli_executable()
     if not exe:
@@ -13814,17 +13858,14 @@ async def jimeng_status():
             "min_version": min_version_str,
         }
 
-@app.get("/api/jimeng/credit")
 async def jimeng_credit():
     raw = await run_jimeng_cli(["user_credit"], timeout=30)
     return {"success": True, "raw": raw}
 
-@app.post("/api/jimeng/logout")
 async def jimeng_logout():
     raw = await run_jimeng_cli(["logout"], timeout=30)
     return {"success": True, "raw": raw}
 
-@app.post("/api/jimeng/login/start")
 async def jimeng_login_start():
     old_proc = JIMENG_LOGIN_SESSION.get("proc")
     if old_proc and getattr(old_proc, "returncode", None) is None:
@@ -13872,7 +13913,6 @@ async def jimeng_login_start():
         "started_at": JIMENG_LOGIN_SESSION.get("started_at") or 0,
     }
 
-@app.get("/api/jimeng/login/status")
 async def jimeng_login_status():
     proc = JIMENG_LOGIN_SESSION.get("proc")
     text = jimeng_login_text()
@@ -13894,7 +13934,6 @@ async def jimeng_login_status():
         "raw": credit_raw,
     }
 
-@app.post("/api/jimeng/help")
 async def jimeng_help(payload: JimengHelpRequest):
     command = str(payload.command or "").strip()
     allowed = {"", "login", "logout", "user_credit", "text2image", "image2image", "image_upscale", "text2video", "image2video", "multimodal2video", "frames2video", "multiframe2video", "list_task", "query_result"}
@@ -13907,7 +13946,6 @@ async def jimeng_help(payload: JimengHelpRequest):
         text = f"{text}\n{raw.get('_stderr')}".strip()
     return {"success": True, "command": command, "text": text, "raw": raw}
 
-@app.post("/api/jimeng/query-media")
 async def jimeng_query_media(payload: JimengQueryMediaRequest):
     """按 submit_id 续查即梦任务：出图返回 succeeded+urls；仍排队返回 pending+queue_info；失败返回 failed。
     供画布「排队中」卡片自动轮询与手动查询复用。"""
@@ -13931,7 +13969,7 @@ async def ai_config():
     preferred_chat_model = next((m for m in CHAT_MODELS if m == "gpt-5.5"), CHAT_MODELS[0] if CHAT_MODELS else CHAT_MODEL)
     providers = public_api_providers()
     return {
-        "base_url": AI_BASE_URL,
+        "base_url": APIMART_DEFAULT_BASE_URL,
         "chat_model": preferred_chat_model,
         "image_model": IMAGE_MODEL,
         "chat_models": CHAT_MODELS,
@@ -13939,9 +13977,7 @@ async def ai_config():
         "video_models": VIDEO_MODELS,
         "comfy_instances": COMFYUI_INSTANCES,
         "api_providers": providers,
-        "has_api_key": bool(AI_API_KEY),
-        "ms_chat_models": MODELSCOPE_CHAT_MODELS,
-        "has_ms_key": bool(modelscope_api_key()),
+        "has_api_key": bool(provider_env_key_value("apimart")),
         "r2_configured": storage_r2.is_configured(),
         "r2_public_base": storage_r2.public_base_url() or "",
     }
@@ -14125,17 +14161,9 @@ async def save_providers(payload: List[ApiProviderPayload]):
 
 @app.get("/api/config/token")
 async def get_global_token():
-    # 优先读 env，回退到 global_config.json（兼容旧数据）
-    saved_token = modelscope_api_key()
+    saved_token = provider_env_key_value("apimart")
     if saved_token:
         return {"token": saved_token}
-    if os.path.exists(GLOBAL_CONFIG_FILE):
-        try:
-            with open(GLOBAL_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return {"token": config.get("modelscope_token", "")}
-        except:
-            pass
     return {"token": ""}
 
 # --- 在线生图 (COMFLY) ---
@@ -14143,56 +14171,23 @@ async def get_global_token():
 class TestConnectionPayload(BaseModel):
     base_url: str = ""
     api_key: str = ""
-    provider_id: str = ""
-    protocol: str = "openai"
+    provider_id: str = "apimart"
+    protocol: str = "apimart"
     image_request_mode: str = "openai"
 
 def protocol_from_payload(payload):
-    provider_id = str(getattr(payload, "provider_id", "") or "").strip().lower()
-    if provider_id == "volcengine":
-        return "volcengine"
-    if provider_id == "runninghub":
-        return "runninghub"
-    if provider_id == "jimeng":
-        return "jimeng"
-    base_url = str(getattr(payload, "base_url", "") or "").strip().lower()
-    if "runninghub.cn" in base_url or "runninghub.ai" in base_url:
-        return "runninghub"
-    protocol = str(getattr(payload, "protocol", "") or "openai").strip().lower()
-    return protocol if protocol in SUPPORTED_PROVIDER_PROTOCOLS else "openai"
+    return "apimart"
 
 def api_key_from_payload(payload, protocol: str = ""):
     explicit = str(getattr(payload, "api_key", "") or "").strip()
-    provider_id = str(getattr(payload, "provider_id", "") or "").strip().lower()
-    protocol = str(protocol or protocol_from_payload(payload) or "").strip().lower()
     if explicit:
         return explicit
-    if provider_id:
-        if provider_id == "runninghub":
-            value = os.getenv(runninghub_wallet_key_env(), "")
-            if value:
-                return value
-        value = provider_env_key_value(provider_id)
-        if value:
-            return value
-    if protocol == "volcengine":
-        return volcengine_provider_api_key("")
-    return ""
+    return provider_env_key_value("apimart")
 
 def upstream_models_url(base_url: str, protocol: str):
-    if protocol == "gemini":
-        return f"{base_url}/models" if base_url.endswith("/v1beta") else f"{base_url}/v1beta/models"
-    if protocol == "volcengine":
-        return f"{base_url}/models" if base_url.endswith("/api/v3") else f"{base_url}/api/v3/models"
-    if protocol == "runninghub":
-        return runninghub_openapi_url({"base_url": base_url}, "models")
     return f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
 
 def upstream_model_headers(api_key: str, protocol: str):
-    if protocol == "gemini":
-        return {"x-goog-api-key": api_key, "Accept": "application/json"}
-    if protocol == "runninghub":
-        return {"Authorization": bearer_auth_value(api_key), "Accept": "application/json"}
     return {"Authorization": bearer_auth_value(api_key), "Accept": "application/json"}
 
 def volcengine_default_model_payload(status=200, message="", raw=None):
