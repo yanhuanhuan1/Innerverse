@@ -7708,6 +7708,38 @@ function bindScrollableText(el){
         if(textSelectionGuard?.el === el) textSelectionGuard.wheelUntil = Date.now() + 180;
     }, {passive:true});
 }
+function wheelDeltaUnit(event, fallbackHeight=800){
+    return event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? fallbackHeight : 1);
+}
+function closestScrollableTextInput(target){
+    const el = target?.closest?.('textarea, input, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"]');
+    if(!el) return null;
+    if(el.tagName === 'INPUT'){
+        const type = String(el.type || 'text').toLowerCase();
+        if(!['text','search','url','tel','email','password'].includes(type)) return null;
+    }
+    const canScrollY = el.scrollHeight > el.clientHeight + 1;
+    const canScrollX = el.scrollWidth > el.clientWidth + 1;
+    return canScrollY || canScrollX ? el : null;
+}
+function handleScrollableTextWheel(event){
+    const el = closestScrollableTextInput(event.target);
+    if(!el) return false;
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    if(event.cancelable) event.preventDefault();
+    const unit = wheelDeltaUnit(event, el.clientHeight || 800);
+    const maxY = Math.max(0, el.scrollHeight - el.clientHeight);
+    const maxX = Math.max(0, el.scrollWidth - el.clientWidth);
+    if(Math.abs(event.deltaX) > Math.abs(event.deltaY)){
+        el.scrollLeft = Math.max(0, Math.min(maxX, el.scrollLeft + event.deltaX * unit));
+    } else {
+        el.scrollTop = Math.max(0, Math.min(maxY, el.scrollTop + event.deltaY * unit));
+        if(event.shiftKey && maxX) el.scrollLeft = Math.max(0, Math.min(maxX, el.scrollLeft + event.deltaY * unit));
+    }
+    if(textSelectionGuard?.el === el) textSelectionGuard.wheelUntil = Date.now() + 180;
+    return true;
+}
 function startLLMPaneResize(e, node){
     e.preventDefault();
     e.stopPropagation();
@@ -9963,6 +9995,7 @@ function handleCanvasComposerPopoverWheel(event){
     }
 }
 document.addEventListener('wheel', event => {
+    if(handleScrollableTextWheel(event)) return;
     if(event.target?.closest?.('[data-composer-popover]')){
         handleCanvasComposerPopoverWheel(event);
     }
@@ -14672,6 +14705,7 @@ board.addEventListener('mousedown', e => {
 });
 board.onwheel = e => {
     if(!canvas) return;
+    if(closestScrollableTextInput(e.target)) return;
     e.preventDefault();
     const before = screenToWorld(e.clientX, e.clientY);
     viewport.scale = safeViewportScale(viewport.scale * canvasWheelZoomFactor(e, board.clientHeight || window.innerHeight || 800));
