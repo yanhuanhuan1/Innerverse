@@ -8,6 +8,7 @@ const promptForm = document.getElementById('promptForm');
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('homeStatus');
 const recentGrid = document.getElementById('recentGrid');
+const homePreviewGrid = document.getElementById('homePreviewGrid');
 const quickTags = document.getElementById('quickTags');
 const uploadStatus = document.getElementById('uploadStatus');
 const dropHint = document.getElementById('dropHint');
@@ -167,6 +168,7 @@ function applyHomeStaticCopy(){
     setText('#attachBtn span', '上传素材', 'Upload assets');
     setText('#startBtn span', '使用 AI 创建', 'Create with AI');
     setText('#recentHeading', '最近项目', 'Recent projects');
+    setText('#homePreviewHeading', '最近项目', 'Recent projects');
     setText('#emailLoginBtn span', '登录', 'Sign in');
     setText('#recentErrorText', '项目加载失败', 'Failed to load projects');
     setText('#recentRetryBtn', '重新加载', 'Reload');
@@ -1077,12 +1079,14 @@ function hideRecentHint(){ showRecentHint(''); }
 
 function renderHomeSkeleton(){
     if(!recentGrid) return;
-    recentGrid.innerHTML = Array.from({length:5}, () => `
+    const skeleton = Array.from({length:5}, () => `
         <div class="skeleton-card skeleton-pulse">
             <div class="skeleton-cover"></div>
             <div class="skeleton-line"></div>
             <div class="skeleton-line short"></div>
         </div>`).join('');
+    recentGrid.innerHTML = skeleton;
+    if(homePreviewGrid) homePreviewGrid.innerHTML = skeleton;
     hideRecentHint();
     if(recentStatus) recentStatus.hidden = true;
 }
@@ -1090,45 +1094,34 @@ function renderHomeSkeleton(){
 function renderRecentError(){
     if(!recentGrid || !recentStatus) return;
     recentGrid.innerHTML = '';
+    if(homePreviewGrid) homePreviewGrid.innerHTML = '';
     hideRecentHint();
     recentStatus.hidden = false;
 }
 
-function renderRecent(){
-    if(!currentUser) {
-        recentGrid.innerHTML = newProjectCardHtml({auth:true});
-        recentGrid.querySelector('[data-auth-login]')?.addEventListener('click', openEmailLogin);
-        showRecentHint(L('登录后创建你的第一个项目','Sign in to start your first project'));
-        if(recentStatus) recentStatus.hidden = true;
-        refreshIcons();
-        return;
-    }
-    const recentProjects = projects
+function sortedProjectsByRecentUpdate(){
+    return projects
         .filter(project => project.id !== 'default')
         .slice()
         .sort((a, b) => {
             const ca = latestCanvasInProject(a.id);
             const cb = latestCanvasInProject(b.id);
             return Number(cb?.updated_at || cb?.created_at || b.updated_at || b.created_at || 0) - Number(ca?.updated_at || ca?.created_at || a.updated_at || a.created_at || 0);
-        })
-        .slice(0, 8);
-    const cards = [
-        newProjectCardHtml(),
-        ...recentProjects.map(project => projectCardHtml(project))
-    ];
-    recentGrid.innerHTML = cards.join('');
-    hideRecentHint();
-    if(!recentProjects.length) showRecentHint(L('从第一个项目开始你的创作','Start your creation with a new project'));
-    if(recentStatus) recentStatus.hidden = true;
-    recentGrid.querySelector('[data-new-canvas]')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
-    recentGrid.querySelectorAll('[data-cover-img]').forEach(img => {
+        });
+}
+
+function bindProjectCards(grid){
+    if(!grid) return;
+    grid.querySelector('[data-new-canvas]')?.addEventListener('click', () => startCreativeProject('', 'canvas'));
+    grid.querySelector('[data-auth-login]')?.addEventListener('click', openEmailLogin);
+    grid.querySelectorAll('[data-cover-img]').forEach(img => {
         img.addEventListener('error', () => {
             const wrap = img.closest('.cover-media');
             if(wrap) wrap.outerHTML = placeholderCoverHtml();
             refreshIcons();
         });
     });
-    recentGrid.querySelectorAll('[data-project-open]').forEach(card => {
+    grid.querySelectorAll('[data-project-open]').forEach(card => {
         bindCanvasPrefetch(card, card.dataset.projectOpen || '');
         card.addEventListener('click', event => {
             if(event.target.closest('button,[data-project-popover],input')) return;
@@ -1141,7 +1134,7 @@ function renderRecent(){
             openProjectCanvas(card.dataset.projectOpen || '');
         });
     });
-    recentGrid.querySelectorAll('[data-project-menu]').forEach(btn => {
+    grid.querySelectorAll('[data-project-menu]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.stopPropagation();
             const projectId = btn.dataset.projectMenu || '';
@@ -1152,7 +1145,7 @@ function renderRecent(){
             renderRecent();
         });
     });
-    recentGrid.querySelectorAll('[data-project-rename]').forEach(btn => {
+    grid.querySelectorAll('[data-project-rename]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.stopPropagation();
             const projectId = btn.dataset.projectRename || '';
@@ -1161,7 +1154,7 @@ function renderRecent(){
             requestAnimationFrame(() => startProjectRename(projectId));
         });
     });
-    recentGrid.querySelectorAll('[data-project-delete]').forEach(btn => {
+    grid.querySelectorAll('[data-project-delete]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.stopPropagation();
             if(btn.disabled) return;
@@ -1170,19 +1163,49 @@ function renderRecent(){
             renderRecent();
         });
     });
-    recentGrid.querySelectorAll('[data-project-delete-confirm]').forEach(btn => {
+    grid.querySelectorAll('[data-project-delete-confirm]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.stopPropagation();
             deleteProject(btn.dataset.projectDeleteConfirm || '');
         });
     });
-    recentGrid.querySelectorAll('[data-project-delete-cancel]').forEach(btn => {
+    grid.querySelectorAll('[data-project-delete-cancel]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.stopPropagation();
             pendingDeleteProjectId = null;
             renderRecent();
         });
     });
+}
+
+function renderRecent(){
+    if(!currentUser) {
+        recentGrid.innerHTML = newProjectCardHtml({auth:true});
+        if(homePreviewGrid) homePreviewGrid.innerHTML = newProjectCardHtml({auth:true});
+        bindProjectCards(recentGrid);
+        bindProjectCards(homePreviewGrid);
+        showRecentHint(L('登录后创建你的第一个项目','Sign in to start your first project'));
+        if(recentStatus) recentStatus.hidden = true;
+        refreshIcons();
+        return;
+    }
+    const recentProjects = sortedProjectsByRecentUpdate();
+    const previewProjects = recentProjects.slice(0, 2);
+    const previewCards = [
+        newProjectCardHtml(),
+        ...previewProjects.map(project => projectCardHtml(project))
+    ];
+    const allCards = [
+        newProjectCardHtml(),
+        ...recentProjects.map(project => projectCardHtml(project))
+    ];
+    if(homePreviewGrid) homePreviewGrid.innerHTML = previewCards.join('');
+    recentGrid.innerHTML = allCards.join('');
+    hideRecentHint();
+    if(!recentProjects.length) showRecentHint(L('从第一个项目开始你的创作','Start your creation with a new project'));
+    if(recentStatus) recentStatus.hidden = true;
+    bindProjectCards(homePreviewGrid);
+    bindProjectCards(recentGrid);
     refreshIcons();
 }
 
