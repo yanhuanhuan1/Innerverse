@@ -4,9 +4,69 @@ let fetchedModels = { image: [], chat: [], video: [], all: [] };
 let pickerCat = 'all';
 
 const APIMART_DEFAULT_BASE_URL = 'https://api.apimart.ai';
-const APIMART_DEFAULT_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-2-official', 'nano-banana-2', 'nano-banana-2-official', 'nano-banana-pro'];
-const APIMART_DEFAULT_CHAT_MODELS = ['gpt-5.1', 'gpt-5', 'claude-sonnet-4.5', 'gemini-3-pro'];
-const APIMART_DEFAULT_VIDEO_MODELS = ['sora-2', 'veo-3.1', 'kling-v3-omni', 'pixverse-v6', 'seedance-2.0'];
+const APIMART_DEFAULT_IMAGE_MODELS = [
+    'gpt-image-2',
+    'gpt-image-2-official',
+    'gpt-image-1-official',
+    'gemini-3.1-flash-image-preview',
+    'gemini-3.1-flash-image-preview-official',
+    'gemini-3-pro-image-preview',
+    'gemini-2.5-flash-image-preview',
+    'doubao-seedream-5-0-lite',
+    'doubao-seedream-5-0-pro',
+    'wan2.7-image-pro',
+    'wan2.7-image',
+    'qwen-image-2.0',
+    'qwen-image-3.0',
+    'z-image-turbo',
+    'grok-imagine-1.5-apimart',
+    'midjourney'
+];
+const APIMART_DEFAULT_CHAT_MODELS = [
+    'gpt-5.5',
+    'gpt-5.1',
+    'gpt-5',
+    'gpt-4.1',
+    'gpt-4o',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash'
+];
+const APIMART_DEFAULT_VIDEO_MODELS = [
+    'veo3.1-fast',
+    'veo3.1-quality',
+    'veo3.1-lite',
+    'veo3.1-fast-official',
+    'veo3.1-quality-official',
+    'sora-2',
+    'sora-2-pro',
+    'doubao-seedance-2.0',
+    'doubao-seedance-1-5-pro',
+    'doubao-seedance-1-0-pro-quality',
+    'doubao-seedance-1-0-pro-fast',
+    'kling-v3',
+    'kling-v3-omni',
+    'kling-video-o1',
+    'kling-v2-6',
+    'MiniMax-Hailuo-02',
+    'wan2.7',
+    'wan2.7-r2v',
+    'wan2.7-videoedit',
+    'wan2.6',
+    'wan2.6-i2v-flash',
+    'wan2.5-preview',
+    'pixverse-v6',
+    'viduq3-pro',
+    'viduq3-turbo',
+    'viduq3-mix',
+    'viduq3',
+    'skyreels-v4-fast',
+    'skyreels-v4-std',
+    'happyhorse-1.1',
+    'happyhorse-1.0',
+    'grok-imagine-1.5-video-apimart',
+    'gemini-omni-flash-preview'
+];
 
 const statusEl = document.getElementById('status');
 const providerList = document.getElementById('providerList');

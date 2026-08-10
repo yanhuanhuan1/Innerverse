@@ -1016,7 +1016,7 @@ function renderVideoBody(node){
     const mediaInputs = ordered.filter(src => src.refs?.some(ref => ['image','video','audio'].includes(mediaKindForRef(ref))));
     const promptInputs = ordered.filter(src => src.prompt && !src.refs?.length);
     sanitizeVideoNodeProviderModel(node);
-    node.model = node.model || 'veo3-fast';
+    node.model = node.model || 'veo3.1-fast';
     const hasInlineOutput = hasInlineGeneratedContent(node);
     const composerOpen = isCanvasGeneratorComposerOpen(node);
     const outputHasVideo = inlineGeneratedOutputItems(node).some(item => mediaKindForOutputItem(item) === 'video');

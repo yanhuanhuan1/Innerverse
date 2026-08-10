@@ -677,13 +677,12 @@ APIMART_DEFAULT_IMAGE_MODELS = [
     "gemini-2.5-flash-image-preview",
     "doubao-seedream-5-0-lite",
     "doubao-seedream-5-0-pro",
-    "doubao-seedream-4-5",
-    "doubao-seedream-4-0",
     "wan2.7-image-pro",
     "wan2.7-image",
-    "qwen-image-2",
+    "qwen-image-2.0",
+    "qwen-image-3.0",
     "z-image-turbo",
-    "grok-imagine-1.5",
+    "grok-imagine-1.5-apimart",
     "midjourney",
 ]
 APIMART_DEFAULT_VIDEO_MODELS = [
@@ -695,12 +694,13 @@ APIMART_DEFAULT_VIDEO_MODELS = [
     "sora-2",
     "sora-2-pro",
     "doubao-seedance-2.0",
-    "doubao-seedance-1.5-pro",
-    "doubao-seedance-1.0-pro",
+    "doubao-seedance-1-5-pro",
+    "doubao-seedance-1-0-pro-quality",
+    "doubao-seedance-1-0-pro-fast",
     "kling-v3",
     "kling-v3-omni",
     "kling-video-o1",
-    "kling-v2.6",
+    "kling-v2-6",
     "MiniMax-Hailuo-02",
     "wan2.7",
     "wan2.7-r2v",
@@ -709,17 +709,16 @@ APIMART_DEFAULT_VIDEO_MODELS = [
     "wan2.6-i2v-flash",
     "wan2.5-preview",
     "pixverse-v6",
-    "vidu-q3-pro",
-    "vidu-q3-turbo",
-    "vidu-q3-mix",
-    "vidu-q3-standard",
+    "viduq3-pro",
+    "viduq3-turbo",
+    "viduq3-mix",
+    "viduq3",
     "skyreels-v4-fast",
     "skyreels-v4-std",
     "happyhorse-1.1",
     "happyhorse-1.0",
-    "grok-imagine-video",
+    "grok-imagine-1.5-video-apimart",
     "gemini-omni-flash-preview",
-    "omni-flash-ext",
 ]
 APIMART_DEFAULT_CHAT_MODELS = [
     "gpt-5.5",
@@ -727,8 +726,6 @@ APIMART_DEFAULT_CHAT_MODELS = [
     "gpt-5",
     "gpt-4.1",
     "gpt-4o",
-    "claude-sonnet-4.5",
-    "claude-opus-4.1",
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -1003,45 +1000,13 @@ def reload_env_globals():
     AI_BASE_URL = os.getenv("COMFLY_BASE_URL", "https://ai.comfly.chat").rstrip("/")
     IMAGE_MODELS = model_list("IMAGE_MODELS", os.getenv("IMAGE_MODEL", IMAGE_MODEL), ["nano-banana-pro"])
     CHAT_MODELS = model_list("CHAT_MODELS", os.getenv("CHAT_MODEL", CHAT_MODEL), ["gpt-4o-mini", "gemini-3.1-flash-image-preview-2k"])
-    VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3-fast", [
-        "veo2", "veo2-fast", "veo2-pro",
-        "veo3", "veo3-fast", "veo3-pro",
-        "veo3.1", "veo3.1-fast", "veo3.1-quality", "veo3.1-lite",
-        "sora-2", "sora-2-pro",
-        "wan2.6-t2v", "wan2.6-i2v",
-        "wan2.5-t2v-preview", "wan2.5-i2v-preview",
-        "wan2.2-t2v-plus", "wan2.2-i2v-plus", "wan2.2-i2v-flash",
-        "doubao-seedance-2-0-260128",
-        "doubao-seedance-2-0-fast-260128",
-        "doubao-seedance-1-5-pro-251215",
-        "doubao-seedance-1-0-pro-250528",
-        "doubao-seedance-1-0-lite-t2v-250428",
-        "doubao-seedance-1-0-lite-i2v-250428",
-    ])
+    VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3.1-fast", APIMART_DEFAULT_VIDEO_MODELS)
     _configured = [m.strip() for m in os.getenv("MODELSCOPE_CHAT_MODELS", "").split(",") if m.strip()]
     MODELSCOPE_CHAT_MODELS = list(dict.fromkeys([m for m in [*MODELSCOPE_DEFAULT_CHAT_MODELS, *_configured] if m]))
 
 CHAT_MODELS = model_list("CHAT_MODELS", CHAT_MODEL, ["gpt-4o-mini", "gemini-3.1-flash-image-preview-2k"])
 IMAGE_MODELS = model_list("IMAGE_MODELS", IMAGE_MODEL, ["nano-banana-pro"])
-VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3-fast", [
-    # —— Veo 系列 ——
-    "veo2", "veo2-fast", "veo2-pro",
-    "veo3", "veo3-fast", "veo3-pro",
-    "veo3.1", "veo3.1-fast", "veo3.1-quality", "veo3.1-lite",
-    # —— Sora ——
-    "sora-2", "sora-2-pro",
-    # —— 阿里 通义万相 ——
-    "wan2.6-t2v", "wan2.6-i2v",
-    "wan2.5-t2v-preview", "wan2.5-i2v-preview",
-    "wan2.2-t2v-plus", "wan2.2-i2v-plus", "wan2.2-i2v-flash",
-    # —— 火山 豆包 Seedance ——
-    "doubao-seedance-2-0-260128",
-    "doubao-seedance-2-0-fast-260128",
-    "doubao-seedance-1-5-pro-251215",
-    "doubao-seedance-1-0-pro-250528",
-    "doubao-seedance-1-0-lite-t2v-250428",
-    "doubao-seedance-1-0-lite-i2v-250428",
-])
+VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3.1-fast", APIMART_DEFAULT_VIDEO_MODELS)
 
 def provider_key_env(provider_id):
     return "APIMART_API_KEY"
@@ -2947,7 +2912,7 @@ def _update_canvas_task_record(task_id: str, updates: Dict[str, Any]) -> Dict[st
 class CanvasVideoRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_MAX_LENGTH)
     provider_id: str = "comfly"
-    model: str = "veo3-fast"
+    model: str = "veo3.1-fast"
     duration: int = 5
     aspect_ratio: str = "16:9"
     resolution: str = ""
@@ -15434,7 +15399,7 @@ def looks_like_html_response(text: str) -> bool:
     return sample.startswith("<!doctype html") or sample.startswith("<html") or "<head" in sample
 
 def video_submit_url_candidates(provider, base_url):
-    if is_grok_provider(provider, "grok-imagine-video"):
+    if is_grok_provider(provider, "grok-imagine-1.5-video-apimart"):
         return [f"{base_url}/v1/videos"]
     if is_agnes_provider(provider):
         return [f"{base_url}/v1/videos"]
@@ -15452,7 +15417,7 @@ def video_submit_url_candidates(provider, base_url):
     return [f"{base_url}/v1/videos/generations", f"{base_url}/v2/videos/generations"]
 
 def video_task_url_candidates(provider, base_url, task_id, submit_url=""):
-    if is_grok_provider(provider, "grok-imagine-video"):
+    if is_grok_provider(provider, "grok-imagine-1.5-video-apimart"):
         quoted_id = urllib.parse.quote(str(task_id), safe="")
         return [f"{base_url}/v1/videos/{quoted_id}"]
     if is_agnes_provider(provider):
@@ -16177,7 +16142,7 @@ async def generate_tudou_video(client, payload, provider, base_url, requested_mo
 
 async def generate_grok_video(client, payload, provider, base_url, requested_model):
     submit_url = f"{base_url}/v1/videos"
-    model = selected_model(requested_model, "grok-imagine-video")
+    model = selected_model(requested_model, "grok-imagine-1.5-video-apimart")
     data = {
         "model": model,
         "prompt": str(payload.prompt or ""),
@@ -16303,7 +16268,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
     volc_is_proxy = bool(is_volcengine and urllib.parse.urlparse(base_url).path.rstrip("/"))
     submit_urls = video_submit_url_candidates(provider, base_url)
     submit_url = submit_urls[0]
-    requested_model = selected_model(payload.model, "agnes-video-v2.0" if is_agnes else "veo3-fast")
+    requested_model = selected_model(payload.model, "agnes-video-v2.0" if is_agnes else "veo3.1-fast")
     if is_grok_provider(provider, requested_model):
         try:
             async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as grok_client:
@@ -16620,7 +16585,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
                             image_payload.append(reference_to_data_url(ref.dict(), max_size=1536))
                     body = {
                         "prompt": payload.prompt,
-                        "model": selected_model(payload.model, "veo3-fast"),
+                        "model": selected_model(payload.model, "veo3.1-fast"),
                         "duration": payload.duration,
                         "watermark": payload.watermark,
                     }
@@ -16731,7 +16696,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
                 f"原因：你的账号没开通这个模型的访问权限（付费/订阅相关）。\n\n"
                 f"解决方法：\n"
                 f"  1. 登录 {provider.get('base_url') or '上游平台'} 控制台，开通该模型 / 充值；\n"
-                f"  2. 或在「API 设置」里把视频模型改成你账号已开通的型号（如 veo3-fast / veo2-fast / sora-2 等）。"
+                f"  2. 或在「API 设置」里把视频模型改成你账号已开通的型号（如 veo3.1-fast / sora-2 / kling-v3 等）。"
             )
             raise HTTPException(status_code=exc.response.status_code, detail=hint) from exc
         if "text.duration" in text or "specified duration is not supported" in text:

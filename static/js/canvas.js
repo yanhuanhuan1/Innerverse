@@ -702,25 +702,39 @@ const CANVAS_SESSION_VIEWPORTS_KEY = 'canvas_session_viewports_v1';
 let canvasSessionViewportFallback = {};
 let quickToolbarExpanded = false;
 const DEFAULT_VIDEO_MODELS = [
-    // Veo
-    'veo2', 'veo2-fast', 'veo2-pro',
-    'veo3', 'veo3-fast', 'veo3-pro',
-    'veo3.1', 'veo3.1-fast', 'veo3.1-quality', 'veo3.1-lite',
-    // Sora
-    'sora-2', 'sora-2-pro',
-    // 通义万相
-    'wan2.6-t2v', 'wan2.6-i2v',
-    'wan2.5-t2v-preview', 'wan2.5-i2v-preview',
-    'wan2.2-t2v-plus', 'wan2.2-i2v-plus', 'wan2.2-i2v-flash',
-    // Seedance
-    'doubao-seedance-2-0-260128',
-    'doubao-seedance-2-0-fast-260128',
-    'doubao-seedance-1-5-pro-251215',
-    'doubao-seedance-1-0-pro-250528',
-    'doubao-seedance-1-0-lite-t2v-250428',
-    'doubao-seedance-1-0-lite-i2v-250428',
-    // Agnes
-    'agnes-video-v2.0'
+    'veo3.1-fast',
+    'veo3.1-quality',
+    'veo3.1-lite',
+    'veo3.1-fast-official',
+    'veo3.1-quality-official',
+    'sora-2',
+    'sora-2-pro',
+    'doubao-seedance-2.0',
+    'doubao-seedance-1-5-pro',
+    'doubao-seedance-1-0-pro-quality',
+    'doubao-seedance-1-0-pro-fast',
+    'kling-v3',
+    'kling-v3-omni',
+    'kling-video-o1',
+    'kling-v2-6',
+    'MiniMax-Hailuo-02',
+    'wan2.7',
+    'wan2.7-r2v',
+    'wan2.7-videoedit',
+    'wan2.6',
+    'wan2.6-i2v-flash',
+    'wan2.5-preview',
+    'pixverse-v6',
+    'viduq3-pro',
+    'viduq3-turbo',
+    'viduq3-mix',
+    'viduq3',
+    'skyreels-v4-fast',
+    'skyreels-v4-std',
+    'happyhorse-1.1',
+    'happyhorse-1.0',
+    'grok-imagine-1.5-video-apimart',
+    'gemini-omni-flash-preview',
 ];
 const JIMENG_SEEDANCE_VIDEO_MODELS = ['seedance2.0_vip', 'seedance2.0fast_vip', 'seedance2.0', 'seedance2.0fast', 'seedance2.0mini'];
 
@@ -890,13 +904,12 @@ function composerModelLabel(model){
         'gemini-2.5-flash-image-preview':'Nano Banana',
         'doubao-seedream-5-0-lite':'Seedream 5 Lite',
         'doubao-seedream-5-0-pro':'Seedream 5 Pro',
-        'doubao-seedream-4-5':'Seedream 4.5',
-        'doubao-seedream-4-0':'Seedream 4',
         'wan2.7-image-pro':'Wan 2.7 Image Pro',
         'wan2.7-image':'Wan 2.7 Image',
-        'qwen-image-2':'Qwen Image 2',
+        'qwen-image-2.0':'Qwen Image 2',
+        'qwen-image-3.0':'Qwen Image 3',
         'z-image-turbo':'Z-Image Turbo',
-        'grok-imagine-1.5':'Grok Imagine 1.5',
+        'grok-imagine-1.5-apimart':'Grok Imagine 1.5',
         'midjourney':'Midjourney'
     };
     return map[text] || text.replace(/-/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
@@ -10561,7 +10574,7 @@ async function runVideoNode(nodeId, opts={}){
             body:JSON.stringify({
                 prompt,
                 provider_id:resolveVideoProviderId(node.apiProvider || 'comfly'),
-                model:node.model || 'veo3-fast',
+                model:node.model || 'veo3.1-fast',
                 duration:Number(node.duration || 5),
                 aspect_ratio:node.aspectRatio || '16:9',
                 resolution:node.resolution || '',
