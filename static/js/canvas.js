@@ -692,6 +692,25 @@ const SIZE_MAP = {
 };
 const RES_LONG_SIDE = { '1k':1536, '2k':2048, '4k':3840 };
 const RES_PIXEL_LIMIT = { '1k':1572864, '2k':4194304, '4k':8294400 };
+const COMPOSER_QUALITY_TO_RESOLUTION = {
+    '512':'512p',
+    '1024':'1k',
+    '1536':'2k',
+    '2048':'4k'
+};
+const COMPOSER_ASPECT_TO_RATIO_KEY = {
+    auto:'square',
+    '1:1':'square',
+    '9:16':'story',
+    '16:9':'wide',
+    '3:4':'portrait43',
+    '4:3':'landscape43',
+    '3:2':'landscape',
+    '2:3':'portrait',
+    '5:4':'landscape43',
+    '4:5':'portrait43',
+    '21:9':'ultrawide'
+};
 const CUSTOM_IMAGE_MODELS_KEY = 'canvas_custom_image_models';
 const MANAGED_IMAGE_MODELS_KEY = 'canvas_image_models_ordered';
 const MANAGED_CHAT_MODELS_KEY = 'canvas_chat_models_ordered';
@@ -1227,9 +1246,35 @@ function ratioPartsFromDimensions(width, height){
 function apiImageSize(ratioValue, resolutionValue, customRatioValue = '', customSizeValue = ''){
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
-    const resolutionKey = resolutionValue || '1k';
-    if(ratioValue === 'custom' || ratioValue === 'source'){
-        const parsed = parseRatioValue(customRatioValue);
+    const directSize = parseSizeValue(customSizeValue);
+    if(directSize?.width && directSize?.height) return `${directSize.width}x${directSize.height}`;
+    const resolutionKey = String(resolutionValue || '1k').toLowerCase();
+    const normalizedRatioValue = SIZE_MAP[ratioValue] ? ratioValue : (COMPOSER_ASPECT_TO_RATIO_KEY[ratioValue] || ratioValue);
+    if(resolutionKey === '512p'){
+        const customRatio512 = normalizedRatioValue === 'custom' || String(ratioValue || '').includes(':');
+        if(customRatio512){
+            const parsed512 = parseRatioValue(customRatioValue || ratioValue);
+            if(parsed512){
+                const longSide512 = 512;
+                const rawWidth = parsed512 >= 1 ? longSide512 : longSide512 * parsed512;
+                const rawHeight = parsed512 >= 1 ? longSide512 / parsed512 : longSide512;
+                const width = Math.max(256, Math.round(rawWidth / 16) * 16);
+                const height = Math.max(256, Math.round(rawHeight / 16) * 16);
+                return `${width}x${height}`;
+            }
+        }
+        const ratioKey512 = normalizedRatioValue && SIZE_MAP[normalizedRatioValue] ? normalizedRatioValue : 'square';
+        const base = parseSizePair(SIZE_MAP[ratioKey512]?.['1k'] || SIZE_MAP.square['1k']);
+        if(base?.width && base?.height){
+            const scale = 512 / Math.max(base.width, base.height);
+            const width = Math.max(256, Math.round((base.width * scale) / 16) * 16);
+            const height = Math.max(256, Math.round((base.height * scale) / 16) * 16);
+            return `${width}x${height}`;
+        }
+        return '512x512';
+    }
+    if(normalizedRatioValue === 'custom' || normalizedRatioValue === 'source' || String(ratioValue || '').includes(':')){
+        const parsed = parseRatioValue(customRatioValue || ratioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
         if(parsed){
             const pixelLimit = RES_PIXEL_LIMIT[resolutionKey] || (longSide * longSide);
@@ -1240,7 +1285,7 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue = '', custom
             return `${Math.max(64, width)}x${Math.max(64, height)}`;
         }
     }
-    const ratioKey = ratioValue && SIZE_MAP[ratioValue] ? ratioValue : 'square';
+    const ratioKey = normalizedRatioValue && SIZE_MAP[normalizedRatioValue] ? normalizedRatioValue : 'square';
     return SIZE_MAP[ratioKey]?.[resolutionKey] || SIZE_MAP.square[resolutionKey] || SIZE_MAP.square['1k'];
 }
 function parseSizePair(value){
@@ -9218,6 +9263,46 @@ function canvasComposerSizeLabel(node){
     const h = Number(node?.height || 1024);
     return `${w}×${h}`;
 }
+function canvasComposerAspectParts(aspect='auto'){
+    if(String(aspect || '').includes(':')){
+        const [w, h] = String(aspect).split(':').map(Number);
+        if(w > 0 && h > 0) return {width:w, height:h};
+    }
+    return {width:1, height:1};
+}
+function syncComposerImageSizing(node){
+    if(!node) return;
+    const quality = canvasComposerSizePreset(node);
+    const aspect = canvasComposerAspectValue(node);
+    const width = Math.max(1, Math.round(Number(node.width) || 1024));
+    const height = Math.max(1, Math.round(Number(node.height) || 1024));
+    node.resolution = COMPOSER_QUALITY_TO_RESOLUTION[quality] || node.resolution || defaultApiImageResolution(node.model);
+    node.customWidth = String(width);
+    node.customHeight = String(height);
+    node.customSize = `${width}x${height}`;
+    const ratioKey = COMPOSER_ASPECT_TO_RATIO_KEY[aspect];
+    if(aspect === 'auto' || aspect === '1:1'){
+        node.ratio = 'square';
+        node.customRatio = '';
+        node.customRatioWidth = '';
+        node.customRatioHeight = '';
+        return;
+    }
+    node.ratio = ratioKey && SIZE_MAP[ratioKey] && !['5:4','4:5'].includes(aspect) ? ratioKey : 'custom';
+    if(String(aspect || '').includes(':')){
+        const parts = canvasComposerAspectParts(aspect);
+        node.customRatio = `${parts.width}:${parts.height}`;
+        node.customRatioWidth = String(parts.width);
+        node.customRatioHeight = String(parts.height);
+    }
+}
+function canvasComposerRequestSize(node, aspect=canvasComposerAspectValue(node), resolution=node?.resolution || '1k'){
+    const width = Math.round(Number(node?.width) || 0);
+    const height = Math.round(Number(node?.height) || 0);
+    if(width > 0 && height > 0) return `${width}x${height}`;
+    const ratioKey = COMPOSER_ASPECT_TO_RATIO_KEY[aspect] || (String(aspect || '').includes(':') ? 'custom' : 'square');
+    return apiImageSize(ratioKey, resolution, String(aspect || '').includes(':') ? aspect : '', '');
+}
 function canvasComposerApplyQuality(node, quality, aspect=canvasComposerAspectValue(node)){
     const size = Number(quality || canvasComposerSizePreset(node) || 1024);
     const ratioMap = {
@@ -9248,7 +9333,7 @@ function canvasComposerApplyQuality(node, quality, aspect=canvasComposerAspectVa
     node.composerAspect = aspect || 'auto';
     node.width = w;
     node.height = h;
-    node.resolution = size >= 2048 ? '4k' : size >= 1536 ? '2k' : size <= 512 ? '512p' : '1k';
+    syncComposerImageSizing(node);
 }
 function canvasComposerStyleOptions(selected=''){
     const options = [
@@ -11227,8 +11312,9 @@ async function runComposerApiImageNode(node, context={}){
     const cascadeTargetId = context.cascadeTargetId || cascadeTargetIdFromOptions(context.opts || {});
     const count = Math.max(1, Math.min(4, Number(node.count || 1)));
     const aspect = canvasComposerAspectValue(node);
-    const resolution = node.resolution || defaultApiImageResolution(model);
-    const requestSize = apiImageSize(aspect, resolution, '', '');
+    syncComposerImageSizing(node);
+    const resolution = COMPOSER_QUALITY_TO_RESOLUTION[canvasComposerSizePreset(node)] || node.resolution || defaultApiImageResolution(model);
+    const requestSize = canvasComposerRequestSize(node, aspect, resolution);
     const run = runSnapshot(node, prompt, refs);
     run.taskLabel = option?.label || composerModelLabel(model);
     const pendingIds = Array.from({length:count}, () => uid('p'));

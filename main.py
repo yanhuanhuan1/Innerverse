@@ -10442,6 +10442,14 @@ def apimart_size_resolution(size):
     best = min(common, key=lambda item: abs(ratio - item[0] / item[1]))
     return best[2], resolution
 
+def normalize_apimart_resolution(value, fallback="1k"):
+    raw = str(value or "").strip().lower()
+    if raw in {"512", "512p"}:
+        return "512p"
+    if raw in {"1k", "2k", "4k"}:
+        return raw
+    return fallback
+
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
 VOLCENGINE_MAX_EDGE = 4096
@@ -12075,7 +12083,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 body["images"] = async_images
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
         elif is_apimart:
-            apimart_size, resolution = apimart_size_resolution(size)
+            apimart_size, parsed_resolution = apimart_size_resolution(size)
+            resolution = normalize_apimart_resolution(resolution, parsed_resolution)
             # APIMart 的 GPT-Image-2 图生图仍走 /images/generations，
             # 通过 image_urls 传参考图，不使用 OpenAI multipart /images/edits。
             body = {
