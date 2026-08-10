@@ -1479,7 +1479,7 @@ def runninghub_openapi_url(provider, path=""):
     base = runninghub_openapi_base_url(provider)
     return f"{base}/{path}" if path else base
 
-def normalize_provider(item):
+def legacy_normalize_provider(item):
     provider_id = str(item.get("id") or "").strip().lower()
     if not PROVIDER_ID_RE.fullmatch(provider_id):
         raise HTTPException(status_code=400, detail=f"API 平台 ID 不合法：{provider_id or '(empty)'}")
@@ -1579,7 +1579,7 @@ def save_api_providers(providers):
         with open(API_PROVIDERS_FILE, "w", encoding="utf-8") as f:
             json.dump(providers, f, ensure_ascii=False, indent=2)
 
-def public_provider(provider):
+def legacy_public_provider(provider):
     if provider.get("id") == "runninghub":
         try:
             provider = runninghub_provider_with_workflow_store(provider)
@@ -1617,7 +1617,7 @@ def public_provider(provider):
 def public_api_providers():
     return [public_provider(p) for p in load_api_providers()]
 
-def get_primary_provider_id(providers=None):
+def legacy_get_primary_provider_id(providers=None):
     """返回当前首选 provider 的 id；优先 primary=True 的，否则取第一个非 modelscope 的，再次取第一个。"""
     providers = providers if providers is not None else load_api_providers()
     primary = next((p for p in providers if p.get("primary") and p.get("enabled", True)), None)
@@ -1628,7 +1628,7 @@ def get_primary_provider_id(providers=None):
         return non_ms["id"]
     return providers[0]["id"] if providers else "modelscope"
 
-def get_api_provider(provider_id="comfly"):
+def legacy_get_api_provider(provider_id="comfly"):
     providers = load_api_providers()
     target = (provider_id or "").strip().lower()
     # 兼容旧的 "comfly" 硬编码：若 comfly 不存在或未指定，回退到首选 provider
@@ -1641,7 +1641,7 @@ def get_api_provider(provider_id="comfly"):
         raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
     return provider
 
-def get_api_provider_exact(provider_id: str):
+def legacy_get_api_provider_exact(provider_id: str):
     providers = load_api_providers()
     target = (provider_id or "").strip().lower()
     provider = next((p for p in providers if p["id"] == target), None)
