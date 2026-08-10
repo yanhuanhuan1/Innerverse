@@ -31,9 +31,11 @@ _DATABASE_URL = str(os.getenv("DATABASE_URL", "")).strip()
 _lock = threading.Lock()
 _conn = None
 _init_error = None
+_init_error_at = 0.0
 _schema_ready = False
 _connection_generation = 0
 _last_connect_duration_ms = 0.0
+_CONNECT_RETRY_SECONDS = 15.0
 
 
 def connection_generation() -> int:
@@ -86,7 +88,7 @@ def warmup_connect() -> bool:
 
 
 def _connect():
-    global _conn, _init_error
+    global _conn, _init_error, _init_error_at
     global _connection_generation, _last_connect_duration_ms
     if _conn is not None:
         try:
@@ -100,7 +102,10 @@ def _connect():
                 pass
             _conn = None
     if _init_error is not None:
-        return None
+        if time.monotonic() - _init_error_at < _CONNECT_RETRY_SECONDS:
+            return None
+        _init_error = None
+        _init_error_at = 0.0
     try:
         import psycopg
         started = time.monotonic()
@@ -131,6 +136,7 @@ def _connect():
         return _conn
     except Exception as exc:
         _init_error = exc
+        _init_error_at = time.monotonic()
         # 只记录异常类型，避免连接串/主机/用户名等敏感信息进入日志
         logger.info(f"[storage_db] failed to connect to Postgres: {type(exc).__name__}")
         return None
@@ -282,6 +288,7 @@ def kv_delete(collection: str, doc_id: str) -> bool:
         if not conn or not _ensure_schema(conn):
             return False
         try:
+            import psycopg
             conn.execute(
                 "DELETE FROM kv_documents WHERE collection = %s AND doc_id = %s",
                 (collection, doc_id),

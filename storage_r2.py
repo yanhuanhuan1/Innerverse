@@ -13,6 +13,7 @@ import os
 import mimetypes
 import urllib.parse
 import logging
+import time
 from typing import Optional
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,8 @@ _R2_PUBLIC_BASE_URL = str(os.getenv("R2_PUBLIC_BASE_URL", "")).strip().rstrip("/
 
 _client = None
 _client_error = None
+_client_error_at = 0.0
+_CLIENT_RETRY_SECONDS = 15.0
 
 
 def is_configured() -> bool:
@@ -35,11 +38,14 @@ def public_base_url() -> str:
 
 
 def _get_client():
-    global _client, _client_error
+    global _client, _client_error, _client_error_at
     if _client is not None:
         return _client
     if _client_error is not None:
-        return None
+        if time.monotonic() - _client_error_at < _CLIENT_RETRY_SECONDS:
+            return None
+        _client_error = None
+        _client_error_at = 0.0
     if not is_configured():
         return None
     try:
@@ -61,6 +67,7 @@ def _get_client():
         return _client
     except Exception as exc:
         _client_error = exc
+        _client_error_at = time.monotonic()
         logger.info(f"[storage_r2] failed to init R2 client: {exc}")
         return None
 

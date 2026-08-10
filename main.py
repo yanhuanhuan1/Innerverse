@@ -8035,13 +8035,18 @@ def migrate_asset_item_registrations(item):
     for key in AVATAR_LEGACY_FLAT_FIELDS:
         item.pop(key, None)
 
-def load_asset_library():
-    if not os.path.exists(ASSET_LIBRARY_PATH):
+def asset_library_path(user_id=""):
+    user_key = user_storage_id(user_id) if user_id else ""
+    return os.path.join(DATA_DIR, f"asset_library-{user_key}.json") if user_key else ASSET_LIBRARY_PATH
+
+def load_asset_library(user_id=""):
+    path = asset_library_path(user_id)
+    if not os.path.exists(path):
         lib = default_asset_library()
-        save_asset_library(lib)
+        save_asset_library(lib, user_id)
         return lib
     try:
-        with open(ASSET_LIBRARY_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             lib = json.load(f)
     except Exception:
         lib = default_asset_library()
@@ -8419,13 +8424,13 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
         "created_at": now_ms(),
     }
 
-def save_asset_library(lib):
+def save_asset_library(lib, user_id=""):
     with CANVAS_LOCK:
         lib = normalize_asset_library(lib)
         sort_asset_library_items(lib)
         lib["updated_at"] = now_ms()
         os.makedirs(DATA_DIR, exist_ok=True)
-        with open(ASSET_LIBRARY_PATH, "w", encoding="utf-8") as f:
+        with open(asset_library_path(user_id), "w", encoding="utf-8") as f:
             json.dump(lib, f, ensure_ascii=False, indent=2)
     if GLOBAL_LOOP:
         asyncio.run_coroutine_threadsafe(manager.broadcast_asset_library_updated(int(lib["updated_at"])), GLOBAL_LOOP)
@@ -12950,7 +12955,8 @@ def migrate_mislabeled_image_extensions():
         logger.info(f"纠正图片扩展名(内容与后缀不符): {fixed} 个")
 
 @app.post("/api/local-assets/upload")
-async def upload_local_assets(files: List[UploadFile] = File(...), folder: str = Form("")):
+async def upload_local_assets(request: Request, files: List[UploadFile] = File(...), folder: str = Form("")):
+    require_current_user(request)
     uploaded = []
     folder_rel, folder_abs = _local_upload_safe_folder(folder)
     os.makedirs(folder_abs, exist_ok=True)
@@ -12979,7 +12985,8 @@ async def upload_local_assets(files: List[UploadFile] = File(...), folder: str =
     return {"files": uploaded}
 
 @app.post("/api/local-assets/import-urls")
-async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest):
+async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest, request: Request):
+    require_current_user(request)
     uploaded = []
     results = []
     folder_rel, folder_abs = _local_upload_safe_folder(payload.folder)
@@ -13054,12 +13061,14 @@ async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest):
     return {"ok": True, "count": len(uploaded), "files": uploaded, "items": results}
 
 @app.get("/api/local-assets")
-async def list_local_assets():
+async def list_local_assets(request: Request):
+    require_current_user(request)
     tree, items = _local_upload_tree_and_items()
     return {"items": items, "tree": tree}
 
 @app.post("/api/local-assets/folders")
 async def create_local_asset_folder(payload: LocalAssetFolderRequest, request: Request):
+    require_current_user(request)
     ensure_same_origin_request(request)
     parent_rel, parent_abs = _local_upload_safe_folder(payload.parent)
     if not os.path.isdir(parent_abs):
@@ -13075,6 +13084,7 @@ async def create_local_asset_folder(payload: LocalAssetFolderRequest, request: R
 
 @app.patch("/api/local-assets/folders")
 async def rename_local_asset_folder(payload: LocalAssetFolderRequest, request: Request):
+    require_current_user(request)
     ensure_same_origin_request(request)
     rel, abs_path = _local_upload_safe_folder(payload.path)
     if not rel:
@@ -13093,6 +13103,7 @@ async def rename_local_asset_folder(payload: LocalAssetFolderRequest, request: R
 
 @app.patch("/api/local-assets/items")
 async def rename_local_asset_item(payload: LocalAssetRenameRequest, request: Request):
+    require_current_user(request)
     ensure_same_origin_request(request)
     rel, abs_path = _local_upload_safe_path(payload.path)
     if not os.path.isfile(abs_path):
@@ -13124,6 +13135,7 @@ async def rename_local_asset_item(payload: LocalAssetRenameRequest, request: Req
 
 @app.post("/api/local-assets/delete")
 async def delete_local_assets(payload: dict, request: Request):
+    require_current_user(request)
     ensure_same_origin_request(request)
     names = payload.get("names") if isinstance(payload, dict) else None
     if not isinstance(names, list):
@@ -13150,6 +13162,7 @@ async def delete_local_assets(payload: dict, request: Request):
 
 @app.post("/api/local-assets/move")
 async def move_local_assets(payload: dict, request: Request):
+    require_current_user(request)
     """把选中的本地素材移动到目标文件夹（folder 为空表示根目录）；连同 .txt / .classification.json 兄弟文件一起搬。"""
     ensure_same_origin_request(request)
     names = payload.get("names") if isinstance(payload, dict) else None
@@ -13194,7 +13207,8 @@ async def move_local_assets(payload: dict, request: Request):
     return {"ok": True, "moved": moved, "items": items, "tree": tree}
 
 @app.post("/api/local-assets/caption")
-async def caption_local_assets(payload: LocalAssetCaptionRequest):
+async def caption_local_assets(payload: LocalAssetCaptionRequest, request: Request):
+    require_current_user(request)
     prompt = (payload.prompt or "描述图片").strip() or "描述图片"
     items = []
     ok_count = 0
@@ -13233,7 +13247,8 @@ async def caption_local_assets(payload: LocalAssetCaptionRequest):
     return {"ok": True, "count": ok_count, "items": items}
 
 @app.post("/api/local-assets/classify")
-async def classify_local_assets(payload: LocalAssetClassifyRequest):
+async def classify_local_assets(payload: LocalAssetClassifyRequest, request: Request):
+    require_current_user(request)
     items = []
     ok_count = 0
     for name in (payload.names or [])[:80]:
@@ -13269,7 +13284,8 @@ async def classify_local_assets(payload: LocalAssetClassifyRequest):
     return {"ok": True, "count": ok_count, "items": items}
 
 @app.patch("/api/local-assets/caption")
-async def save_local_asset_caption(payload: LocalAssetCaptionSaveRequest):
+async def save_local_asset_caption(payload: LocalAssetCaptionSaveRequest, request: Request):
+    require_current_user(request)
     filename, path = _local_upload_safe_path(payload.name)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="文件不存在")
@@ -16993,23 +17009,23 @@ async def auth_logout(request: Request):
     return res
 
 @app.get("/api/conversations")
-async def conversations(request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def conversations(request: Request):
+    user_id = require_current_user(request)["id"]
     return {"user_id": user_id, "conversations": list_conversations(user_id)}
 
 @app.post("/api/conversations")
-async def create_conversation(payload: ConversationCreateRequest, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def create_conversation(payload: ConversationCreateRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     return {"conversation": new_conversation(user_id, payload.title)}
 
 @app.get("/api/conversations/{conversation_id}")
-async def get_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def get_conversation(conversation_id: str, request: Request):
+    user_id = require_current_user(request)["id"]
     return {"conversation": load_conversation(user_id, conversation_id)}
 
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def delete_conversation(conversation_id: str, request: Request):
+    user_id = require_current_user(request)["id"]
     path = conversation_path(user_id, conversation_id)
     if os.path.exists(path):
         os.remove(path)
@@ -17364,28 +17380,31 @@ async def export_canvas_workflow(payload: CanvasWorkflowExportRequest):
     return Response(archive, media_type="application/zip", headers=headers)
 
 @app.post("/api/canvas-workflows/export-to-library")
-async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest):
+async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     archive, meta = build_canvas_workflow_archive(payload)
     filename = sanitize_export_filename(payload.filename or "canvas-workflow.zip", "canvas-workflow.zip")
     if not filename.lower().endswith(".zip"):
         filename += ".zip"
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     _, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
     item = make_workflow_library_item_from_bytes(archive, filename, payload.name or os.path.splitext(filename)[0])
     item["node_count"] = meta.get("node_count") or len(payload.nodes or [])
     item["connection_count"] = meta.get("connection_count") or len(payload.connections or [])
     item["resource_count"] = len(meta.get("resources") or [])
     cat.setdefault("items", []).append(item)
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "item": item}
 
 @app.post("/api/asset-library/workflows/upload")
 async def upload_asset_library_workflows(
+    request: Request,
     files: List[UploadFile] = File(...),
     library_id: str = Form(""),
     category_id: str = Form(""),
 ):
-    lib = load_asset_library()
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     _, cat = asset_library_workflow_category(lib, library_id, category_id)
     added = []
     for file in files[:100]:
@@ -17399,7 +17418,7 @@ async def upload_asset_library_workflows(
         added.append(item)
     if not added:
         raise HTTPException(status_code=400, detail="没有可上传的工作流文件")
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "items": added}
 
 @app.post("/api/canvas-workflows/import")
@@ -17469,8 +17488,9 @@ async def import_canvas_workflow(file: UploadFile = File(...)):
     }
 
 @app.get("/api/asset-library")
-async def get_asset_library():
-    return {"library": load_asset_library()}
+async def get_asset_library(request: Request):
+    user_id = require_current_user(request)["id"]
+    return {"library": load_asset_library(user_id)}
 
 @app.get("/api/prompt-libraries")
 async def get_prompt_libraries():
@@ -17656,29 +17676,32 @@ async def delete_prompt_library_category(category_id: str):
     return {"library": public_prompt_libraries(data)}
 
 @app.post("/api/asset-library/libraries")
-async def create_asset_library(payload: AssetLibraryRequest):
-    lib = load_asset_library()
+async def create_asset_library(payload: AssetLibraryRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     library = {"id": f"lib_{uuid.uuid4().hex[:12]}", "name": sanitize_asset_name(payload.name, "资产库"), "type": "asset", "categories": []}
     library["categories"].append({"id": f"cat_{uuid.uuid4().hex[:12]}", "name": "默认分组", "type": "image", "items": []})
     library["categories"].append({"id": f"wf_{uuid.uuid4().hex[:12]}", "name": "工作流", "type": "workflow", "items": []})
     lib.setdefault("libraries", []).append(library)
     lib["active_library_id"] = library["id"]
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "asset_library": library}
 
 @app.patch("/api/asset-library/libraries/{library_id}")
-async def rename_asset_library(library_id: str, payload: AssetLibraryRenameRequest):
-    lib = load_asset_library()
+async def rename_asset_library(library_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     library = find_asset_library(lib, library_id)
     if not library or library.get("id") != library_id:
         raise HTTPException(status_code=404, detail="资产库不存在")
     library["name"] = sanitize_asset_name(payload.name, library.get("name") or "资产库")
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "asset_library": library}
 
 @app.delete("/api/asset-library/libraries/{library_id}")
-async def delete_asset_library(library_id: str):
-    lib = load_asset_library()
+async def delete_asset_library(library_id: str, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     libraries = lib.get("libraries") or []
     if len(libraries) <= 1:
         raise HTTPException(status_code=400, detail="至少保留一个资产库")
@@ -17687,12 +17710,13 @@ async def delete_asset_library(library_id: str):
     lib["libraries"] = [item for item in libraries if item.get("id") != library_id]
     if lib.get("active_library_id") == library_id:
         lib["active_library_id"] = lib["libraries"][0].get("id")
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib}
 
 @app.post("/api/asset-library/categories")
-async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
-    lib = load_asset_library()
+async def create_asset_library_category(payload: AssetLibraryCategoryRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     library = find_asset_library(lib, payload.library_id)
     if not library:
         raise HTTPException(status_code=404, detail="资产库不存在")
@@ -17707,22 +17731,24 @@ async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
             logger.info(f"创建分组文件夹失败: {exc}")
     library.setdefault("categories", []).append(category)
     lib["active_library_id"] = library.get("id") or lib.get("active_library_id")
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "category": category}
 
 @app.patch("/api/asset-library/categories/{category_id}")
-async def rename_asset_library_category(category_id: str, payload: AssetLibraryRenameRequest):
-    lib = load_asset_library()
+async def rename_asset_library_category(category_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     _, cat = find_asset_category_with_library(lib, category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
     cat["name"] = sanitize_asset_name(payload.name, cat.get("name") or "新文件夹")
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "category": cat}
 
 @app.delete("/api/asset-library/categories/{category_id}")
-async def delete_asset_library_category(category_id: str, library_id: str = ""):
-    lib = load_asset_library()
+async def delete_asset_library_category(category_id: str, request: Request, library_id: str = ""):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     library, cat = find_asset_category_with_library(lib, category_id, library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -17740,12 +17766,13 @@ async def delete_asset_library_category(category_id: str, library_id: str = ""):
         except Exception as exc:
             logger.info(f"删除分组文件夹失败: {exc}")
     library["categories"] = [c for c in library.get("categories", []) if c.get("id") != category_id]
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib}
 
 @app.post("/api/asset-library/items")
-async def add_asset_library_item(payload: AssetLibraryAddRequest):
-    lib = load_asset_library()
+async def add_asset_library_item(payload: AssetLibraryAddRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -17760,13 +17787,14 @@ async def add_asset_library_item(payload: AssetLibraryAddRequest):
         if classification:
             item["classification"] = classification
     cat.setdefault("items", []).append(item)
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "item": item}
 
 @app.post("/api/asset-library/items/batch")
-async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest):
+async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     added = []
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -17785,11 +17813,12 @@ async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest):
                 item["classification"] = classification
         cat.setdefault("items", []).append(item)
         added.append(item)
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "items": added}
 
 @app.get("/api/shared-folders")
-async def list_shared_folders():
+async def list_shared_folders(request: Request):
+    require_current_user(request)
     data = shared_folders_load()
     folders = []
     for entry in data.get("folders", []):
@@ -17805,7 +17834,8 @@ async def list_shared_folders():
     return {"folders": folders}
 
 @app.post("/api/shared-folders")
-async def register_shared_folder(payload: SharedFolderRegister):
+async def register_shared_folder(payload: SharedFolderRegister, request: Request):
+    require_current_user(request)
     abs_path, rel = shared_resolve_register(payload.path)
     name = sanitize_asset_name(payload.name or os.path.basename(abs_path), "共享文件夹")
     with SHARED_FOLDERS_LOCK:
@@ -17826,7 +17856,8 @@ async def register_shared_folder(payload: SharedFolderRegister):
     return {"folder": {**entry, "path": abs_path, "exists": True}}
 
 @app.delete("/api/shared-folders/{folder_id}")
-async def unregister_shared_folder(folder_id: str):
+async def unregister_shared_folder(folder_id: str, request: Request):
+    require_current_user(request)
     with SHARED_FOLDERS_LOCK:
         data = shared_folders_load()
         before = len(data.get("folders", []))
@@ -17837,7 +17868,8 @@ async def unregister_shared_folder(folder_id: str):
     return {"ok": True}
 
 @app.get("/api/shared-folders/{folder_id}/tree")
-async def get_shared_folder_tree(folder_id: str):
+async def get_shared_folder_tree(folder_id: str, request: Request):
+    require_current_user(request)
     entry = shared_folder_by_id(folder_id)
     if not entry:
         raise HTTPException(status_code=404, detail="共享文件夹不存在")
@@ -17848,7 +17880,8 @@ async def get_shared_folder_tree(folder_id: str):
     return {"folder": {"id": folder_id, "name": entry.get("name"), "path": abs_path}, "tree": tree}
 
 @app.get("/api/shared-folders/{folder_id}/file")
-async def get_shared_folder_file(folder_id: str, path: str = ""):
+async def get_shared_folder_file(folder_id: str, request: Request, path: str = ""):
+    require_current_user(request)
     entry = shared_folder_by_id(folder_id)
     if not entry:
         raise HTTPException(status_code=404, detail="共享文件夹不存在")
@@ -17862,12 +17895,13 @@ async def get_shared_folder_file(folder_id: str, path: str = ""):
     return FileResponse(abs_path, media_type=content_type_for_path(abs_path))
 
 @app.post("/api/shared-folders/import")
-async def import_shared_folder_files(payload: SharedFolderImport):
+async def import_shared_folder_files(payload: SharedFolderImport, request: Request):
+    user_id = require_current_user(request)["id"]
     entry = shared_folder_by_id(payload.folder_id)
     if not entry:
         raise HTTPException(status_code=404, detail="共享文件夹不存在")
     folder_abs = shared_folder_abs(entry)
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -17888,7 +17922,7 @@ async def import_shared_folder_files(payload: SharedFolderImport):
                 item["classification"] = classification
         cat.setdefault("items", []).append(item)
         added.append(item)
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "items": added}
 
 async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_model=""):
@@ -17952,14 +17986,15 @@ async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_m
     return text or "接口返回了空回复。", resolved_model
 
 @app.patch("/api/asset-library/items/{item_id}")
-async def rename_asset_library_item(item_id: str, payload: AssetLibraryRenameRequest):
-    lib = load_asset_library()
+async def rename_asset_library_item(item_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     for library in lib.get("libraries", []):
         for cat in library.get("categories", []):
             for item in cat.get("items", []):
                 if item.get("id") == item_id:
                     item["name"] = sanitize_asset_name(payload.name, item.get("name") or "asset")
-                    save_asset_library(lib)
+                    save_asset_library(lib, user_id)
                     return {"library": lib, "item": item}
     raise HTTPException(status_code=404, detail="资产不存在")
 
@@ -17974,8 +18009,9 @@ def find_asset_item_in_library(lib, item_id, library_id=""):
     return None
 
 @app.post("/api/asset-library/items/classify")
-async def classify_asset_library_items(payload: AssetLibraryClassifyRequest):
-    lib = load_asset_library()
+async def classify_asset_library_items(payload: AssetLibraryClassifyRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     results = []
     changed = False
     for item_id in (payload.ids or [])[:80]:
@@ -18003,12 +18039,13 @@ async def classify_asset_library_items(payload: AssetLibraryClassifyRequest):
             result["error"] = str(getattr(exc, "detail", "") or exc)
         results.append(result)
     if changed:
-        save_asset_library(lib)
+        save_asset_library(lib, user_id)
     return {"library": lib, "count": sum(1 for item in results if item.get("ok")), "items": results}
 
 @app.post("/api/asset-library/items/{item_id}/register-avatar")
-async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest):
-    lib = load_asset_library()
+async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     target_item = find_asset_item_in_library(lib, item_id, payload.library_id)
     if not target_item:
         raise HTTPException(status_code=404, detail="资产不存在")
@@ -18057,12 +18094,13 @@ async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegist
         "registered_at": now_ms(),
     }
     target_item["registrations"] = regs
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "item": target_item}
 
 @app.post("/api/asset-library/items/{item_id}/avatar-status")
-async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest):
-    lib = load_asset_library()
+async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     target_item = find_asset_item_in_library(lib, item_id, payload.library_id)
     if not target_item:
         raise HTTPException(status_code=404, detail="资产不存在")
@@ -18090,12 +18128,13 @@ async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterR
         reg["asset_id"] = result["asset_uri"].replace("asset://", "")
     regs[platform] = reg
     target_item["registrations"] = regs
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "item": target_item}
 
 @app.delete("/api/asset-library/items/{item_id}")
-async def delete_asset_library_item(item_id: str):
-    lib = load_asset_library()
+async def delete_asset_library_item(item_id: str, request: Request):
+    user_id = require_current_user(request)["id"]
+    lib = load_asset_library(user_id)
     removed = None
     for library in lib.get("libraries", []):
         for cat in library.get("categories", []):
@@ -18109,15 +18148,16 @@ async def delete_asset_library_item(item_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="资产不存在")
     remove_asset_library_file(removed)  # 同时删除本地文件，避免磁盘上堆积
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib}
 
 @app.post("/api/asset-library/items/delete")
-async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteRequest):
+async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     removed = 0
     removed_items = []
     for library in lib.get("libraries", []):
@@ -18134,15 +18174,16 @@ async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteReque
             cat["items"] = keep
     for item in removed_items:  # 批量删除同时清理本地文件
         remove_asset_library_file(item)
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "removed": removed}
 
 @app.post("/api/asset-library/items/move")
-async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
+async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     target_cat = find_asset_category_in_library(lib, payload.target_category_id, payload.target_library_id)
     if not target_cat:
         raise HTTPException(status_code=404, detail="目标分组不存在")
@@ -18166,16 +18207,17 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
         if item.get("id") not in existing_ids:
             target_cat.setdefault("items", []).append(item)
             existing_ids.add(item.get("id"))
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "moved": len(moved)}
 
 @app.post("/api/asset-library/items/crop")
-async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
+async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     Image, ImageOps = pil_modules()
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
-    lib = load_asset_library()
+    lib = load_asset_library(user_id)
     target_cat = None
     if payload.target_category_id:
         target_cat = find_asset_category_in_library(lib, payload.target_category_id, payload.target_library_id)
@@ -18222,7 +18264,7 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
                                 pass
                 except Exception:
                     continue
-    save_asset_library(lib)
+    save_asset_library(lib, user_id)
     return {"library": lib, "added": len(added), "items": added}
 
 @app.put("/api/canvases/{canvas_id}")
@@ -18378,8 +18420,8 @@ async def purge_canvas(canvas_id: str, request: Request):
 # --- GPT 对话 ---
 
 @app.post("/api/chat")
-async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def chat(payload: ChatRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
@@ -18508,8 +18550,8 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
     return {"conversation": conversation, "message": assistant_message}
 
 @app.post("/api/chat/agent")
-async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def chat_agent(payload: ChatRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
@@ -18594,8 +18636,8 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     return {"conversation": conversation, "message": assistant_message, "agent": {"action": action, "decision": decision}}
 
 @app.post("/api/chat/agent/stream")
-async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+async def chat_agent_stream(payload: ChatRequest, request: Request):
+    user_id = require_current_user(request)["id"]
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
@@ -18759,11 +18801,11 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 @app.post("/api/chat/stream")
-async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+async def chat_stream(payload: ChatRequest, request: Request):
     if payload.mode == "image":
         raise HTTPException(status_code=400, detail="图片模式请使用 /api/chat")
 
-    user_id = safe_user_id(x_user_id, request)
+    user_id = require_current_user(request)["id"]
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
