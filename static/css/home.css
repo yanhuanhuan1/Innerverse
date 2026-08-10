@@ -342,22 +342,34 @@ a { color: inherit; }
 }
 .recent-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 18px;
 }
 .project-card {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
     border-radius: 14px;
     background: transparent;
     color: var(--text);
     text-align: left;
     outline: none;
+    font: inherit;
+    cursor: pointer;
     transition: transform .18s var(--ease);
 }
 .project-card:hover { transform: translateY(-2px); }
 .project-card:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
 .card-cover {
     position: relative;
+    display: block;
+    flex: 0 0 auto;
+    width: 100%;
     aspect-ratio: 16 / 9;
     border-radius: 13px;
     overflow: hidden;
@@ -413,7 +425,6 @@ a { color: inherit; }
     transition: border-color .18s var(--ease), color .18s var(--ease), background .18s var(--ease), transform .18s var(--ease), box-shadow .18s var(--ease);
 }
 .new-cover i { width: 26px; height: 26px; }
-.project-card.new:hover { transform: translateY(-2px); }
 .project-card.new:hover .new-cover {
     border-color: var(--accent);
     color: var(--accent);
@@ -422,22 +433,31 @@ a { color: inherit; }
 }
 .project-card.new:focus-visible .new-cover { border-color: var(--accent); color: var(--accent); }
 .project-card.new .card-cover { border-style: dashed; }
-.card-body { padding: 11px 2px 0; }
+.card-body {
+    display: grid;
+    grid-template-rows: 20px 18px;
+    row-gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 11px 2px 0;
+}
 .project-name {
     margin: 0;
     font-size: 14.5px;
     font-weight: 600;
-    line-height: 1.35;
+    line-height: 20px;
+    min-height: 20px;
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .project-updated {
-    margin: 4px 0 0;
+    margin: 0;
     font-size: 12.5px;
     color: var(--muted);
-    line-height: 1.4;
+    line-height: 18px;
+    min-height: 18px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -649,14 +669,14 @@ a { color: inherit; }
 
 /* ===== 响应式 ===== */
 @media (max-width: 1180px) {
-    .recent-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    .recent-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
     .home-hero { width: min(100% - 36px, 760px); padding-top: 108px; }
     .prompt-actions { flex-direction: column; align-items: stretch; }
     .prompt-left, .prompt-right { justify-content: space-between; }
     .start-btn { width: 100%; }
-    .recent-grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 14px; }
+    .recent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     .home-topbar { top: 12px; right: 12px; }
 }
 @media (max-width: 420px) {
