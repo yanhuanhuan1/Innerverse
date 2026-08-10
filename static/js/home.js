@@ -262,8 +262,8 @@ window.toggleHomeLanguage = toggleHomeLanguage;
 
 function focusProjectsSection(){
     homeFocus = 'projects';
-    const target = document.getElementById('recentSection');
-    if(target) target.scrollIntoView({behavior:'smooth', block:'start'});
+    document.querySelector('.home-page')?.classList.add('projects-view');
+    window.scrollTo(0, 0);
     try {
         if(window.parent && window.parent !== window) {
             window.parent.postMessage({type:'home:section-focus', section:'projects'}, window.location.origin);
@@ -273,7 +273,8 @@ function focusProjectsSection(){
 
 function focusHeroSection(){
     homeFocus = 'hero';
-    window.scrollTo({top:0, behavior:'smooth'});
+    document.querySelector('.home-page')?.classList.remove('projects-view');
+    window.scrollTo(0, 0);
     try {
         if(window.parent && window.parent !== window) {
             window.parent.postMessage({type:'home:section-focus', section:'home'}, window.location.origin);
@@ -286,10 +287,7 @@ function isHomeWheelInteractiveTarget(target){
 }
 
 function syncHomeFocusFromScroll(){
-    const target = document.getElementById('recentSection');
-    if(!target) return;
-    const threshold = Math.max(120, target.offsetTop * 0.45);
-    const next = window.scrollY >= threshold ? 'projects' : 'hero';
+    const next = document.querySelector('.home-page')?.classList.contains('projects-view') ? 'projects' : 'hero';
     if(next === homeFocus) return;
     homeFocus = next;
     try {
@@ -307,7 +305,7 @@ function handleHomeWheel(event){
         event.preventDefault();
         homeWheelGate = now;
         focusProjectsSection();
-    } else if(event.deltaY < -28 && homeFocus === 'projects' && window.scrollY <= (document.getElementById('recentSection')?.offsetTop || 0) + 80) {
+    } else if(event.deltaY < -28 && homeFocus === 'projects') {
         event.preventDefault();
         homeWheelGate = now;
         focusHeroSection();

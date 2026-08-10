@@ -33,10 +33,11 @@
     --shadow: rgba(0, 0, 0, .25);
 }
 * { box-sizing: border-box; }
-html { height: 100%; }
+html { height: 100%; overflow: hidden; }
 body {
     margin: 0;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     background: var(--page);
     color: var(--text);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -137,9 +138,22 @@ a { color: inherit; }
 .user-menu-sep { height: 1px; margin: 5px 8px; background: var(--line); }
 
 /* ===== 主体 ===== */
-.home-main { width: 100%; }
+.home-page {
+    height: 100vh;
+    overflow: hidden;
+    background: var(--page);
+}
+.home-main {
+    width: 100%;
+    height: 200vh;
+    transform: translate3d(0, 0, 0);
+    transition: transform .78s cubic-bezier(.22, 1, .36, 1);
+    will-change: transform;
+}
+.home-page.projects-view .home-main { transform: translate3d(0, -100vh, 0); }
 .home-hero {
     width: min(760px, calc(100% - 48px));
+    min-height: 100vh;
     margin: 0 auto;
     padding-top: clamp(116px, 15vh, 168px);
     text-align: center;
@@ -329,11 +343,14 @@ a { color: inherit; }
 /* ===== 最近项目 ===== */
 .recent-section {
     width: min(1440px, 100%);
-    min-height: 100vh;
-    margin: clamp(52px, 7vh, 72px) auto 0;
+    height: 100vh;
+    margin: 0 auto;
     padding: clamp(34px, 6vh, 64px) clamp(18px, 3vw, 40px) 72px;
+    overflow-y: auto;
+    scrollbar-width: none;
     scroll-margin-top: 0;
 }
+.recent-section::-webkit-scrollbar { display: none; }
 .section-head { margin-bottom: 18px; }
 .section-head h2 {
     margin: 0;
@@ -687,5 +704,4 @@ a { color: inherit; }
 }
 @media (max-height: 760px) {
     .home-hero { padding-top: 104px; }
-    .recent-section { margin-top: 44px; }
 }
