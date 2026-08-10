@@ -4687,7 +4687,7 @@ async def responses_input_image_url(ref, require_public_url=False) -> str:
     几 MB 的 base64 请求体会让部分中转源站处理超时，公网 URL 让请求体和文生图一样小；
     图床不可用时回退内联 base64（Responses 协议两种都支持）。"""
     raw = ref.get("url", "") if isinstance(ref, dict) else ref
-    text = str(raw or "").strip()
+    text = normalize_own_public_media_url(raw)
     if not text:
         return ""
     local_path = text
@@ -7047,6 +7047,10 @@ def _r2_key_for_path(path):
         rel = os.path.relpath(abs_path, assets_root).replace("\\", "/")
         if not rel.startswith("../") and rel != "..":
             return rel
+        output_root = os.path.abspath(OUTPUT_DIR)
+        out_rel = os.path.relpath(abs_path, output_root).replace("\\", "/")
+        if not out_rel.startswith("../") and out_rel != "..":
+            return f"output/{out_rel}"
     except Exception:
         pass
     return None
@@ -7188,6 +7192,50 @@ def _r2_local_path_from_public_url(url):
         return None
     return path
 
+def _public_media_hosts():
+    hosts = set()
+    candidates = [
+        storage_r2.public_base_url(),
+        public_base_url() if "public_base_url" in globals() else "",
+        read_api_env_value("PUBLIC_MEDIA_BASE_URL") if "read_api_env_value" in globals() else "",
+        os.getenv("PUBLIC_MEDIA_BASE_URL"),
+        PUBLIC_MEDIA_BASE_URL,
+        read_api_env_value("PUBLIC_BASE_URL") if "read_api_env_value" in globals() else "",
+        os.getenv("PUBLIC_BASE_URL"),
+        PUBLIC_BASE_URL,
+    ]
+    for value in candidates:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            host = urllib.parse.urlsplit(text).hostname
+            if host:
+                hosts.add(host.lower())
+        except Exception:
+            continue
+    return hosts
+
+def own_public_media_path(url):
+    text = str(url or "").strip()
+    if not re.match(r"^https?://", text, re.I):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(text)
+    except Exception:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if not host or host not in _public_media_hosts():
+        return ""
+    path = urllib.parse.unquote(parsed.path or "").replace("\\", "/")
+    if path.startswith(("/output/", "/assets/", "/api/storage-files/")):
+        return path
+    return ""
+
+def normalize_own_public_media_url(value):
+    text = str(value or "").strip()
+    return own_public_media_path(text) or text
+
 def storage_file_path(kind, rel):
     root = storage_kind_dir(kind)
     rel_path = str(rel or "").replace("\\", "/").lstrip("/")
@@ -7207,6 +7255,7 @@ def output_file_from_url(url):
         url = url.get("url", "")
     if not url:
         return None
+    url = normalize_own_public_media_url(url)
     r2_local = _r2_local_path_from_public_url(url)
     if r2_local:
         return r2_local if _remote_hydrate_local(r2_local) else None
@@ -9188,6 +9237,7 @@ def attachment_text_blocks(refs, limit_each=MAX_ATTACHMENT_TEXT_CHARS):
 def media_reference_to_url(value, max_image_size=None):
     if not isinstance(value, str) or not value:
         return ""
+    value = normalize_own_public_media_url(value)
     if value.startswith("/output/") or value.startswith("/assets/"):
         return reference_to_data_url({"url": value}, max_size=max_image_size)
     return value
@@ -9201,6 +9251,7 @@ def volcengine_media_reference_url(value, max_image_size=1536):
     value = value.strip()
     if not value:
         return ""
+    value = normalize_own_public_media_url(value)
     if is_private_asset_url(value):
         return value
     if value.startswith("/output/") or value.startswith("/assets/"):
@@ -9446,10 +9497,29 @@ def public_media_url_suffix() -> str:
     token = str(os.getenv("PUBLIC_MEDIA_TOKEN") or "").strip()
     return f"?token={urllib.parse.quote(token)}" if token else ""
 
-def local_asset_public_url(value: str) -> str:
-    text = str(value or "").strip()
-    if not text.startswith(("/output/", "/assets/")):
+def r2_public_url_for_local_media(value: str) -> str:
+    text = normalize_own_public_media_url(value)
+    if not text.startswith(("/output/", "/assets/", "/api/storage-files/")):
         return ""
+    if not storage_r2.is_configured() or not storage_r2.public_base_url():
+        return ""
+    path = output_file_from_url(text)
+    if not path:
+        return ""
+    key = _r2_key_for_path(path)
+    if not key:
+        return ""
+    if storage_r2.object_exists_status(key) is True or storage_r2.upload_file(key, path):
+        return storage_r2.public_url_for(key) or ""
+    return ""
+
+def local_asset_public_url(value: str) -> str:
+    text = normalize_own_public_media_url(value)
+    if not text.startswith(("/output/", "/assets/", "/api/storage-files/")):
+        return ""
+    r2_url = r2_public_url_for_local_media(text)
+    if r2_url:
+        return r2_url
     if not output_file_from_url(text):
         return ""
     base = public_base_url()
@@ -9495,7 +9565,7 @@ async def openai_video_proxy_public_reference_url(ref) -> str:
 
 def openai_video_proxy_local_image_path(ref) -> str:
     raw = ref.get("url", "") if isinstance(ref, dict) else ref
-    text = str(raw or "").strip()
+    text = normalize_own_public_media_url(raw)
     if not text:
         return ""
     local_path = ""
@@ -9700,7 +9770,7 @@ async def upload_image_for_apimart(client, provider, ref_url: str) -> str:
     按 APIMart 文档上传到 /v1/uploads/images，拿到可用于生成接口的 http/https URL。
     绝不把 /output/* 或 /assets/* 这类本地路径直接传给上游。
     返回上游可用 URL；返回值以 "ERR:" 开头表示具体失败原因（供前端展示）。"""
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if not ref_url:
         return "ERR:空地址"
     # 已经是网络 URL 或 asset:// → 直接可用，无需上传
@@ -9760,7 +9830,7 @@ async def upload_image_for_apimart(client, provider, ref_url: str) -> str:
 async def upload_video_for_apimart(client, provider, ref_url: str) -> str:
     """尽力把本地参考视频转换为 APIMart 可接受的 http/https 或 asset:// URL。
     文档只公开了图片上传；如果视频上传端点不可用，会回退到 PUBLIC_BASE_URL 方案。"""
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if not ref_url:
         return "ERR:空地址"
     if valid_apimart_video_image_input(ref_url):
@@ -9806,7 +9876,7 @@ async def upload_audio_for_apimart(client, provider, ref_url: str) -> str:
     """把本地参考音频转换为 APIMart 可接受的 http/https 或 asset:// URL。
     优先用公网地址（PUBLIC_BASE_URL），否则尝试上传到 APIMart 文件端点。
     返回值以 "ERR:" 开头表示失败原因。"""
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if not ref_url:
         return "ERR:空地址"
     if valid_apimart_video_image_input(ref_url):
@@ -10074,16 +10144,19 @@ async def check_volcengine_avatar_task(asset_id: str, project_name: str = "defau
 
 def volcengine_public_asset_url(url: str) -> str:
     """火山 CreateAsset 要求 URL 公网可访问；本地文件需 PUBLIC_BASE_URL，否则返回 ERR:。"""
-    text = str(url or "").strip()
+    original = str(url or "").strip()
+    text = normalize_own_public_media_url(original)
     if text.startswith("http://") or text.startswith("https://"):
         return text
     public = local_asset_public_url(text)
     if public:
         return public
+    if original.startswith(("http://", "https://")) and original != text:
+        return "ERR:站内媒体文件无法转换为可供上游下载的公网地址，请确认 R2_PUBLIC_BASE_URL/R2 存储配置并重新生成或上传素材。"
     return "ERR:火山要求素材是公网可访问的 http/https URL；本地画布文件需配置 PUBLIC_BASE_URL/PUBLIC_MEDIA_BASE_URL 暴露为公网地址。"
 
 def local_media_path_for_cloud_upload(ref_url: str, allowed_prefixes=("image/", "video/")) -> str:
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if not ref_url:
         raise HTTPException(status_code=400, detail="没有可上传的媒体文件")
     if ref_url.startswith("http://") or ref_url.startswith("https://"):
@@ -10146,7 +10219,7 @@ async def upload_video_to_temp_sh(path: str, source_url: str) -> Dict[str, str]:
         raise HTTPException(status_code=502, detail=f"Temp.sh 上传异常：{exc}") from exc
 
 async def upload_local_video_to_cloud(ref_url: str, service: str = "auto") -> Dict[str, str]:
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if ref_url.startswith("http://") or ref_url.startswith("https://"):
         return {"url": ref_url, "source": ref_url, "service": "existing"}
     path = local_media_path_for_cloud_upload(ref_url)
@@ -15744,7 +15817,7 @@ async def save_video_bytes_to_output(data: bytes, prefix="video_", category="out
 async def yuli_fetch_reference_bytes(client, ref_url):
     """把参考图（input_reference 垫图）取成 (filename, bytes, mime)，
     支持 /output、/assets 本地文件、data URL、http(s) URL。失败返回 None。"""
-    ref_url = str(ref_url or "").strip()
+    ref_url = normalize_own_public_media_url(ref_url)
     if not ref_url:
         return None
     if ref_url.startswith("data:"):
@@ -16348,7 +16421,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
                 video_payload = []
                 invalid_videos = []
                 for ref_url in payload.videos[:3]:
-                    ref_url = str(ref_url or "").strip()
+                    ref_url = normalize_own_public_media_url(ref_url)
                     if not ref_url:
                         continue
                     normalized_video_url = await upload_video_for_apimart(client, provider, ref_url)
@@ -16435,7 +16508,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
                     audio_payload = []
                     invalid_audios = []
                     for ref_url in (payload.audios or [])[:3]:
-                        ref_url = str(ref_url or "").strip()
+                        ref_url = normalize_own_public_media_url(ref_url)
                         if not ref_url:
                             continue
                         normalized_audio_url = await upload_audio_for_apimart(client, provider, ref_url)
